@@ -16,6 +16,21 @@ services:
     networks:
       - event-network
 
+  registration-service:
+    build: ./registration-service
+    container_name: registration-service
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+      - USER_SERVICE_URL=http://user-service:3001
+      - EVENT_SERVICE_URL=http://event-service:3002
+    depends_on:
+      - database
+    networks:
+      - event-network
+
   prometheus:
     image: prom/prometheus
     container_name: prometheus

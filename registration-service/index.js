@@ -2,8 +2,12 @@ const express = require("express");
 const cors = require("cors");
 const axios = require("axios");
 require("dotenv").config();
-const pool = require("./config/db");
+//const pool = require("./config/db");
+const { Pool } = require("pg");
 
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+});
 const app = express();
 
 app.use(cors());
@@ -146,6 +150,20 @@ const newRegistration = result.rows[0];
   }
 });
 
+// Get all registrations
+app.get("/registrations", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT * FROM registrations ORDER BY id");
+
+    res.json(result.rows);
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to get registrations",
+      error: error.message,
+    });
+  }
+});
+
 // Get all registrations for one user
 app.get("/registrations/user/:userId", async (req, res) => {
   const userId = Number(req.params.userId);
@@ -209,6 +227,22 @@ app.get("/metrics", async (req, res) => {
 registration_total ${totalResult.rows[0].count}
 registration_paid_total ${paidResult.rows[0].count}
 `);
+});
+// Temporary database test route
+app.get("/db-test", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT NOW()");
+
+    res.json({
+      message: "Database connection successful",
+      time: result.rows[0].now,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Database connection failed",
+      error: error.message,
+    });
+  }
 });
 app.listen(PORT, () => {
   console.log(`Registration Service running on port ${PORT}`);
