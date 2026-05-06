@@ -1,0 +1,106 @@
+version: "3.9"
+
+services:
+  database:
+    image: postgres:15
+    container_name: database
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=event_management
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - event-network
+
+  user-service:
+    build: ./user-service
+    container_name: user-service
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+      - JWT_SECRET=event-management-dev-secret
+    depends_on:
+      - database
+    networks:
+      - event-network
+
+  event-service:
+    build: ./event-service
+    container_name: event-service
+    ports:
+      - "3002:3002"
+    environment:
+      - PORT=3002
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+    depends_on:
+      - database
+    networks:
+      - event-network
+
+  registration-service:
+    build: ./registration-service
+    container_name: registration-service
+    ports:
+      - "3003:3003"
+    environment:
+      - PORT=3003
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+      - USER_SERVICE_URL=http://user-service:3001
+      - EVENT_SERVICE_URL=http://event-service:3002
+    depends_on:
+      - database
+      - user-service
+      - event-service
+    networks:
+      - event-network
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    ports:
+      - "3004:3004"
+    environment:
+      - PORT=3004
+      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+    depends_on:
+      - database
+    networks:
+      - event-network
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    depends_on:
+      - user-service
+      - event-service
+      - registration-service
+      - notification-service
+    networks:
+      - event-network
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3005:3000"
+    depends_on:
+      - prometheus
+    networks:
+      - event-network
+
+volumes:
+  postgres-data:
+
+networks:
+  event-network:
+    driver: bridge
