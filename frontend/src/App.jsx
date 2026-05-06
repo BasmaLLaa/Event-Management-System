@@ -1,419 +1,1976 @@
-import { useEffect, useState } from "react";
-import axios from "axios";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { api, getErrorMessage, serviceBaseUrls } from "./api";
+import "./App.css";
 
-const USER_API = "http://localhost:3001";
-const EVENT_API = "http://localhost:3002";
-const REGISTRATION_API = "http://localhost:3003";
+const emptyRegisterForm = {
+  name: "",
+  email: "",
+  password: "",
+};
 
-function App() {
-  const [page, setPage] = useState("events");
-  const [message, setMessage] = useState("");
-  const [currentUser, setCurrentUser] = useState(null);
+const emptyLoginForm = {
+  email: "sasa@example.com",
+  password: "123456",
+};
 
-  const [registerForm, setRegisterForm] = useState({
-    name: "",
-    email: "",
-    password: "",
-  });
+const emptyFilters = {
+  search: "",
+  status: "",
+  category: "",
+  location: "",
+};
 
-  const [loginForm, setLoginForm] = useState({
-    email: "",
-    password: "",
-  });
+const defaultBookingDraft = {
+  paymentStatus: "paid",
+  paymentMethod: "card",
+  amount: "",
+};
 
-  const [events, setEvents] = useState([]);
-  const [selectedEvent, setSelectedEvent] = useState(null);
-  const [bookings, setBookings] = useState([]);
+const defaultNotificationDraft = {
+  type: "test",
+  userId: "",
+  eventId: "",
+  paymentStatus: "success",
+  message: "",
+};
 
-  async function fetchEvents() {
-    try {
-      const response = await axios.get(`${EVENT_API}/events`);
-      setEvents(response.data);
-    } catch (error) {
-      setMessage("Failed to load events. Make sure Event Service is running on port 3002.");
-    }
+const navItems = [
+  { id: "events", label: "Browse Events" },
+  { id: "bookings", label: "My Bookings" },
+  { id: "notifications", label: "Alerts" },
+  { id: "account", label: "Account" },
+  { id: "manage", label: "Host Event" },
+];
+
+const eventStatuses = ["upcoming", "cancelled", "completed"];
+const notificationTypes = [
+  { value: "test", label: "General" },
+  { value: "event-update", label: "Event update" },
+  { value: "reminder", label: "Reminder" },
+  { value: "payment", label: "Payment" },
+];
+
+function getDefaultEventForm(userId = "") {
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+  return {
+    title: "",
+    description: "",
+    date: tomorrow,
+    startTime: "10:00",
+    endTime: "12:00",
+    location: "",
+    capacity: "30",
+    category: "General",
+    organizerId: userId ? String(userId) : "",
+    status: "upcoming",
+  };
+}
+
+function readStoredSession() {
+  try {
+    const user = window.localStorage.getItem("event-dashboard-user");
+    const token = window.localStorage.getItem("event-dashboard-token");
+
+    return {
+      user: user ? JSON.parse(user) : null,
+      token: token || "",
+    };
+  } catch {
+    return { user: null, token: "" };
+  }
+}
+
+function normalizeEvents(response) {
+  if (Array.isArray(response)) {
+    return response;
   }
 
-  useEffect(() => {
-    fetchEvents();
-  }, []);
+  return response?.events || [];
+}
 
-  async function handleRegister(e) {
-    e.preventDefault();
+function formatDate(value) {
+  if (!value) return "Not scheduled";
 
-    try {
-      const response = await axios.post(`${USER_API}/users/register`, registerForm);
-      setCurrentUser(response.data.user || response.data);
-      setMessage("Registered successfully.");
-      setRegisterForm({ name: "", email: "", password: "" });
-      setPage("events");
-    } catch (error) {
-      setMessage("Register failed. Check User Service endpoint.");
-    }
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
+}
+
+function formatDateTime(value) {
+  if (!value) return "Not recorded";
+
+  return new Intl.DateTimeFormat("en", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function uniqueSorted(values) {
+  return [...new Set(values.filter(Boolean))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+}
+
+function toNumberOrUndefined(value) {
+  if (value === "" || value == null) {
+    return undefined;
   }
 
-  async function handleLogin(e) {
-    e.preventDefault();
+  return Number(value);
+}
 
-    try {
-      const response = await axios.post(`${USER_API}/users/login`, loginForm);
-      setCurrentUser(response.data.user || response.data);
-      setMessage("Logged in successfully.");
-      setLoginForm({ email: "", password: "" });
-      setPage("events");
-    } catch (error) {
-      setMessage("Login failed. Check User Service endpoint.");
-    }
+function toOptionalString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function buildEventPayload(form, includeStatus = false) {
+  const payload = {
+    title: form.title.trim(),
+    description: form.description.trim(),
+    date: form.date,
+    startTime: form.startTime,
+    endTime: form.endTime,
+    location: form.location.trim(),
+    capacity: Number(form.capacity),
+    category: form.category.trim() || "General",
+    organizerId: toNumberOrUndefined(form.organizerId),
+  };
+
+  if (includeStatus) {
+    payload.status = form.status;
   }
 
-  async function openEventDetails(id) {
-    try {
-      const response = await axios.get(`${EVENT_API}/events/${id}`);
-      setSelectedEvent(response.data);
-      setPage("details");
-    } catch (error) {
-      setMessage("Failed to load event details.");
-    }
-  }
+  return payload;
+}
 
-  async function bookEvent(eventId) {
-    if (!currentUser) {
-      setMessage("Please login first before booking.");
-      setPage("login");
-      return;
-    }
-
-    try {
-      await axios.post(`${REGISTRATION_API}/registrations`, {
-        userId: currentUser.id,
-        eventId: eventId,
-      });
-
-      setMessage("Booking successful.");
-    } catch (error) {
-      setMessage("Booking failed. Make sure all services are running.");
-    }
-  }
-
-  async function fetchMyBookings() {
-    if (!currentUser) {
-      setMessage("Please login first.");
-      setPage("login");
-      return;
-    }
-
-    try {
-      const response = await axios.get(
-        `${REGISTRATION_API}/registrations/user/${currentUser.id}`
-      );
-
-      setBookings(response.data);
-      setPage("bookings");
-    } catch (error) {
-      setMessage("Failed to load bookings.");
-    }
-  }
-
-  async function cancelBooking(id) {
-    try {
-      await axios.delete(`${REGISTRATION_API}/registrations/${id}`);
-      setBookings(bookings.filter((booking) => booking.id !== id));
-      setMessage("Booking cancelled.");
-    } catch (error) {
-      setMessage("Failed to cancel booking.");
-    }
-  }
-
+function isEventFormValid(form) {
   return (
-    <div style={styles.page}>
-      <nav style={styles.navbar}>
-        <h2>Event Management System</h2>
+    form.title.trim() &&
+    form.description.trim() &&
+    form.date &&
+    form.startTime &&
+    form.endTime &&
+    form.location.trim() &&
+    Number(form.capacity) > 0
+  );
+}
 
-        <div>
-          <button style={styles.navButton} onClick={() => setPage("events")}>
-            Events
-          </button>
-          <button style={styles.navButton} onClick={() => setPage("register")}>
-            Register
-          </button>
-          <button style={styles.navButton} onClick={() => setPage("login")}>
-            Login
-          </button>
-          <button style={styles.navButton} onClick={fetchMyBookings}>
-            My Bookings
-          </button>
-        </div>
-      </nav>
+function statusClass(status) {
+  return `status-pill status-${status || "neutral"}`;
+}
 
-      <main style={styles.container}>
-        {currentUser && (
-          <div style={styles.successBox}>
-            Logged in as: {currentUser.name || currentUser.email || currentUser.id}
-          </div>
-        )}
+function Field({ id, label, children, hint }) {
+  return (
+    <label className="field" htmlFor={id}>
+      <span>{label}</span>
+      {children}
+      {hint ? <small>{hint}</small> : null}
+    </label>
+  );
+}
 
-        {message && <div style={styles.messageBox}>{message}</div>}
+function StatusPill({ value }) {
+  return <span className={statusClass(value)}>{value || "unknown"}</span>;
+}
 
-        {page === "register" && (
-          <section style={styles.card}>
-            <h1>Register</h1>
-
-            <form onSubmit={handleRegister} style={styles.form}>
-              <input
-                style={styles.input}
-                placeholder="Name"
-                value={registerForm.name}
-                onChange={(e) =>
-                  setRegisterForm({ ...registerForm, name: e.target.value })
-                }
-              />
-
-              <input
-                style={styles.input}
-                placeholder="Email"
-                type="email"
-                value={registerForm.email}
-                onChange={(e) =>
-                  setRegisterForm({ ...registerForm, email: e.target.value })
-                }
-              />
-
-              <input
-                style={styles.input}
-                placeholder="Password"
-                type="password"
-                value={registerForm.password}
-                onChange={(e) =>
-                  setRegisterForm({ ...registerForm, password: e.target.value })
-                }
-              />
-
-              <button style={styles.primaryButton} type="submit">
-                Register
-              </button>
-            </form>
-          </section>
-        )}
-
-        {page === "login" && (
-          <section style={styles.card}>
-            <h1>Login</h1>
-
-            <form onSubmit={handleLogin} style={styles.form}>
-              <input
-                style={styles.input}
-                placeholder="Email"
-                type="email"
-                value={loginForm.email}
-                onChange={(e) =>
-                  setLoginForm({ ...loginForm, email: e.target.value })
-                }
-              />
-
-              <input
-                style={styles.input}
-                placeholder="Password"
-                type="password"
-                value={loginForm.password}
-                onChange={(e) =>
-                  setLoginForm({ ...loginForm, password: e.target.value })
-                }
-              />
-
-              <button style={styles.primaryButton} type="submit">
-                Login
-              </button>
-            </form>
-          </section>
-        )}
-
-        {page === "events" && (
-          <section>
-            <h1>Events List</h1>
-
-            <button style={styles.secondaryButton} onClick={fetchEvents}>
-              Refresh Events
-            </button>
-
-            <div style={styles.grid}>
-              {events.length === 0 ? (
-                <p>No events found.</p>
-              ) : (
-                events.map((event) => (
-                  <div key={event.id} style={styles.card}>
-                    <h2>{event.title}</h2>
-                    <p>{event.description}</p>
-                    <p><strong>Date:</strong> {event.date}</p>
-                    <p><strong>Location:</strong> {event.location}</p>
-                    <p><strong>Capacity:</strong> {event.capacity}</p>
-
-                    <button
-                      style={styles.primaryButton}
-                      onClick={() => openEventDetails(event.id)}
-                    >
-                      View Details
-                    </button>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
-        )}
-
-        {page === "details" && selectedEvent && (
-          <section style={styles.card}>
-            <h1>{selectedEvent.title}</h1>
-            <p>{selectedEvent.description}</p>
-            <p><strong>Date:</strong> {selectedEvent.date}</p>
-            <p><strong>Location:</strong> {selectedEvent.location}</p>
-            <p><strong>Capacity:</strong> {selectedEvent.capacity}</p>
-
-            <button
-              style={styles.primaryButton}
-              onClick={() => bookEvent(selectedEvent.id)}
-            >
-              Book Event
-            </button>
-
-            <button
-              style={styles.secondaryButton}
-              onClick={() => setPage("events")}
-            >
-              Back
-            </button>
-          </section>
-        )}
-
-        {page === "bookings" && (
-          <section>
-            <h1>My Bookings</h1>
-
-            {bookings.length === 0 ? (
-              <p>No bookings found.</p>
-            ) : (
-              <div style={styles.grid}>
-                {bookings.map((booking) => (
-                  <div key={booking.id} style={styles.card}>
-                    <h2>Booking #{booking.id}</h2>
-                    <p><strong>User ID:</strong> {booking.userId}</p>
-                    <p><strong>Event ID:</strong> {booking.eventId}</p>
-                    <p><strong>Status:</strong> {booking.status}</p>
-
-                    <button
-                      style={styles.dangerButton}
-                      onClick={() => cancelBooking(booking.id)}
-                    >
-                      Cancel Booking
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-      </main>
+function EmptyState({ title, message, action }) {
+  return (
+    <div className="empty-state">
+      <h3>{title}</h3>
+      <p>{message}</p>
+      {action}
     </div>
   );
 }
 
-const styles = {
-  page: {
-    minHeight: "100vh",
-    background: "#f4f6f8",
-    fontFamily: "Arial, sans-serif",
-    color: "#222",
-  },
-  navbar: {
-    background: "#1f2937",
-    color: "white",
-    padding: "16px 28px",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  navButton: {
-    margin: "5px",
-    padding: "10px 14px",
-    border: "none",
-    borderRadius: "6px",
-    background: "#374151",
-    color: "white",
-    cursor: "pointer",
-  },
-  container: {
-    maxWidth: "1100px",
-    margin: "30px auto",
-    padding: "0 20px",
-  },
-  card: {
-    background: "white",
-    padding: "20px",
-    borderRadius: "10px",
-    marginTop: "20px",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-    gap: "20px",
-    marginTop: "20px",
-  },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "12px",
-    maxWidth: "400px",
-  },
-  input: {
-    padding: "12px",
-    borderRadius: "6px",
-    border: "1px solid #ccc",
-    fontSize: "16px",
-  },
-  primaryButton: {
-    background: "#2563eb",
-    color: "white",
-    border: "none",
-    padding: "11px 16px",
-    borderRadius: "6px",
-    cursor: "pointer",
-    marginRight: "10px",
-    marginTop: "10px",
-  },
-  secondaryButton: {
-    background: "#6b7280",
-    color: "white",
-    border: "none",
-    padding: "11px 16px",
-    borderRadius: "6px",
-    cursor: "pointer",
-    marginRight: "10px",
-    marginTop: "10px",
-  },
-  dangerButton: {
-    background: "#dc2626",
-    color: "white",
-    border: "none",
-    padding: "11px 16px",
-    borderRadius: "6px",
-    cursor: "pointer",
-    marginTop: "10px",
-  },
-  messageBox: {
-    background: "#fff7ed",
-    border: "1px solid #fdba74",
-    padding: "12px",
-    borderRadius: "6px",
-    marginBottom: "15px",
-  },
-  successBox: {
-    background: "#ecfdf5",
-    border: "1px solid #6ee7b7",
-    padding: "12px",
-    borderRadius: "6px",
-    marginBottom: "15px",
-  },
-};
+function ServiceCard({ service }) {
+  return (
+    <article className={`service-card ${service.ok ? "online" : "offline"}`}>
+      <div>
+        <span className="service-dot" aria-hidden="true" />
+        <h3>{service.name}</h3>
+      </div>
+      <strong>{service.ok ? "Online" : "Attention"}</strong>
+      <p>{service.detail}</p>
+      <small>{service.baseUrl}</small>
+    </article>
+  );
+}
+
+function App() {
+  const storedSession = useMemo(() => readStoredSession(), []);
+  const [activeView, setActiveView] = useState("events");
+  const [currentUser, setCurrentUser] = useState(storedSession.user);
+  const [token, setToken] = useState(storedSession.token);
+  const [notice, setNotice] = useState(null);
+
+  const [registerForm, setRegisterForm] = useState(emptyRegisterForm);
+  const [loginForm, setLoginForm] = useState(emptyLoginForm);
+  const [lookupId, setLookupId] = useState("");
+  const [lookupResult, setLookupResult] = useState(null);
+
+  const [events, setEvents] = useState([]);
+  const [eventFilters, setEventFilters] = useState(emptyFilters);
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState("");
+  const [selectedEvent, setSelectedEvent] = useState(null);
+  const [eventForm, setEventForm] = useState(() =>
+    getDefaultEventForm(storedSession.user?.id),
+  );
+  const [editingEventId, setEditingEventId] = useState(null);
+  const [eventSaving, setEventSaving] = useState(false);
+
+  const [registrations, setRegistrations] = useState([]);
+  const [registrationsLoading, setRegistrationsLoading] = useState(false);
+  const [bookingDraft, setBookingDraft] = useState(defaultBookingDraft);
+
+  const [notifications, setNotifications] = useState([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationDraft, setNotificationDraft] = useState(() => ({
+    ...defaultNotificationDraft,
+    userId: storedSession.user?.id ? String(storedSession.user.id) : "",
+  }),
+  );
+
+  const [services, setServices] = useState([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
+
+  const eventById = useMemo(
+    () => new Map(events.map((event) => [Number(event.id), event])),
+    [events],
+  );
+
+  const categories = useMemo(
+    () => uniqueSorted(events.map((event) => event.category)),
+    [events],
+  );
+
+  const summary = useMemo(() => {
+    const capacity = events.reduce(
+      (total, event) => total + Number(event.capacity || 0),
+      0,
+    );
+    const booked = events.reduce(
+      (total, event) => total + Number(event.bookedSeats || 0),
+      0,
+    );
+    const unread = notifications.filter(
+      (notification) => notification.status === "unread",
+    ).length;
+
+    return {
+      totalEvents: events.length,
+      upcomingEvents: events.filter((event) => event.status === "upcoming")
+        .length,
+      booked,
+      capacity,
+      registrations: registrations.length,
+      unread,
+    };
+  }, [events, notifications, registrations]);
+
+  const nextEvent = useMemo(
+    () =>
+      events
+        .filter((event) => event.status === "upcoming")
+        .toSorted((first, second) => new Date(first.date) - new Date(second.date))[0],
+    [events],
+  );
+
+  const setSuccess = useCallback((message) => {
+    setNotice({ type: "success", message });
+  }, []);
+
+  const setError = useCallback((message) => {
+    setNotice({ type: "error", message });
+  }, []);
+
+  const loadEvents = useCallback(
+    async (filters = emptyFilters) => {
+      await Promise.resolve();
+      setEventsLoading(true);
+      setEventsError("");
+
+      try {
+        const response = await api.events.list(filters);
+        const nextEvents = normalizeEvents(response);
+        setEvents(nextEvents);
+        setSelectedEvent((previous) => {
+          if (!previous) {
+            return previous;
+          }
+
+          const refreshed = nextEvents.find(
+            (event) => Number(event.id) === Number(previous.id),
+          );
+
+          return refreshed || previous;
+        });
+      } catch (error) {
+        const message = getErrorMessage(error, "Failed to load events");
+        setEventsError(message);
+        setError(message);
+      } finally {
+        setEventsLoading(false);
+      }
+    },
+    [setError],
+  );
+
+  const loadRegistrations = useCallback(
+    async (userId) => {
+      if (!userId) return;
+
+      await Promise.resolve();
+      setRegistrationsLoading(true);
+
+      try {
+        const response = await api.registrations.listByUser(userId);
+        setRegistrations(Array.isArray(response) ? response : []);
+      } catch (error) {
+        setError(getErrorMessage(error, "Failed to load registrations"));
+      } finally {
+        setRegistrationsLoading(false);
+      }
+    },
+    [setError],
+  );
+
+  const loadNotifications = useCallback(
+    async (userId) => {
+      if (!userId) return;
+
+      await Promise.resolve();
+      setNotificationsLoading(true);
+
+      try {
+        const response = await api.notifications.listByUser(userId);
+        setNotifications(Array.isArray(response) ? response : []);
+      } catch (error) {
+        setError(getErrorMessage(error, "Failed to load notifications"));
+      } finally {
+        setNotificationsLoading(false);
+      }
+    },
+    [setError],
+  );
+
+  const loadServiceHealth = useCallback(async () => {
+    await Promise.resolve();
+    setServicesLoading(true);
+
+    const checks = [
+      {
+        name: "User Service",
+        baseUrl: serviceBaseUrls.user,
+        request: api.health.user,
+        detail: (data) => `${data.service || "user-service"} ${data.status}`,
+      },
+      {
+        name: "User Database",
+        baseUrl: serviceBaseUrls.user,
+        request: api.health.userDb,
+        detail: (data) => `PostgreSQL ${data.database}`,
+      },
+      {
+        name: "Event Service",
+        baseUrl: serviceBaseUrls.event,
+        request: api.health.event,
+        detail: (data) => `${data.totalEvents ?? 0} events available`,
+      },
+      {
+        name: "Registration Service",
+        baseUrl: serviceBaseUrls.registration,
+        request: api.health.registration,
+        detail: (data) => `${data.totalRegistrations ?? 0} registrations`,
+      },
+      {
+        name: "Notification Service",
+        baseUrl: serviceBaseUrls.notification,
+        request: api.health.notification,
+        detail: (data) => String(data),
+      },
+      {
+        name: "Notification Database",
+        baseUrl: serviceBaseUrls.notification,
+        request: api.health.notificationDb,
+        detail: (data) => `PostgreSQL ${data.database}`,
+      },
+    ];
+
+    const results = await Promise.all(
+      checks.map(async (check) => {
+        try {
+          const data = await check.request();
+
+          return {
+            name: check.name,
+            baseUrl: check.baseUrl,
+            ok: true,
+            detail: check.detail(data),
+          };
+        } catch (error) {
+          return {
+            name: check.name,
+            baseUrl: check.baseUrl,
+            ok: false,
+            detail: getErrorMessage(error, "Service unavailable"),
+          };
+        }
+      }),
+    );
+
+    setServices(results);
+    setServicesLoading(false);
+  }, []);
+
+  useEffect(() => {
+    const timerId = window.setTimeout(() => {
+      loadEvents();
+    }, 0);
+
+    return () => window.clearTimeout(timerId);
+  }, [loadEvents]);
+
+  useEffect(() => {
+    if (activeView === "system") {
+      const timerId = window.setTimeout(() => {
+        loadServiceHealth();
+      }, 0);
+
+      return () => window.clearTimeout(timerId);
+    }
+
+    return undefined;
+  }, [activeView, loadServiceHealth]);
+
+  useEffect(() => {
+    if (currentUser?.id) {
+      const timerId = window.setTimeout(() => {
+        loadRegistrations(currentUser.id);
+        loadNotifications(currentUser.id);
+      }, 0);
+
+      return () => window.clearTimeout(timerId);
+    }
+
+    return undefined;
+  }, [currentUser?.id, loadNotifications, loadRegistrations]);
+
+  useEffect(() => {
+    if (currentUser) {
+      window.localStorage.setItem(
+        "event-dashboard-user",
+        JSON.stringify(currentUser),
+      );
+      window.localStorage.setItem("event-dashboard-token", token);
+    } else {
+      window.localStorage.removeItem("event-dashboard-user");
+      window.localStorage.removeItem("event-dashboard-token");
+    }
+  }, [currentUser, token]);
+
+  function syncEvent(updatedEvent) {
+    setEvents((previous) =>
+      previous.map((event) =>
+        Number(event.id) === Number(updatedEvent.id) ? updatedEvent : event,
+      ),
+    );
+
+    setSelectedEvent((previous) =>
+      previous && Number(previous.id) === Number(updatedEvent.id)
+        ? updatedEvent
+        : previous,
+    );
+  }
+
+  async function handleRegister(event) {
+    event.preventDefault();
+
+    if (
+      !registerForm.name.trim() ||
+      !registerForm.email.trim() ||
+      registerForm.password.length < 6
+    ) {
+      setError("Name, email, and a 6 character password are required.");
+      return;
+    }
+
+    try {
+      const response = await api.users.register({
+        name: registerForm.name.trim(),
+        email: registerForm.email.trim(),
+        password: registerForm.password,
+      });
+      setCurrentUser(response.user);
+      setToken(response.token || "");
+      setNotificationDraft((draft) => ({
+        ...draft,
+        userId: response.user?.id ? String(response.user.id) : draft.userId,
+      }));
+      setEventForm((form) => ({
+        ...form,
+        organizerId: response.user?.id
+          ? String(response.user.id)
+          : form.organizerId,
+      }));
+      setRegisterForm(emptyRegisterForm);
+      setActiveView("events");
+      setSuccess(response.message || "User registered successfully.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Registration failed"));
+    }
+  }
+
+  async function handleLogin(event) {
+    event.preventDefault();
+
+    if (!loginForm.email.trim() || !loginForm.password) {
+      setError("Email and password are required.");
+      return;
+    }
+
+    try {
+      const response = await api.users.login({
+        email: loginForm.email.trim(),
+        password: loginForm.password,
+      });
+      setCurrentUser(response.user);
+      setToken(response.token || "");
+      setNotificationDraft((draft) => ({
+        ...draft,
+        userId: response.user?.id ? String(response.user.id) : draft.userId,
+      }));
+      setEventForm((form) => ({
+        ...form,
+        organizerId: response.user?.id
+          ? String(response.user.id)
+          : form.organizerId,
+      }));
+      setActiveView("events");
+      setSuccess(response.message || "Login successful.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Login failed"));
+    }
+  }
+
+  async function handleLookupUser(event) {
+    event.preventDefault();
+
+    if (!Number(lookupId)) {
+      setError("Enter a positive numeric user ID.");
+      return;
+    }
+
+    try {
+      const response = await api.users.getById(lookupId);
+      setLookupResult(response);
+      setSuccess(`Loaded ${response.name || response.email}.`);
+    } catch (error) {
+      setLookupResult(null);
+      setError(getErrorMessage(error, "User lookup failed"));
+    }
+  }
+
+  function logout() {
+    setCurrentUser(null);
+    setToken("");
+    setLookupResult(null);
+    setRegistrations([]);
+    setNotifications([]);
+    setActiveView("account");
+    setSuccess("Signed out.");
+  }
+
+  async function openEventDetails(id) {
+    try {
+      const response = await api.events.getById(id);
+      setSelectedEvent(response);
+      setActiveView("events");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to load event details"));
+    }
+  }
+
+  function startEditingEvent(event) {
+    setEditingEventId(event.id);
+    setEventForm({
+      title: event.title || "",
+      description: event.description || "",
+      date: event.date ? String(event.date).slice(0, 10) : "",
+      startTime: event.startTime || "",
+      endTime: event.endTime || "",
+      location: event.location || "",
+      capacity: String(event.capacity || ""),
+      category: event.category || "General",
+      organizerId: event.organizerId ? String(event.organizerId) : "",
+      status: event.status || "upcoming",
+    });
+    setActiveView("manage");
+  }
+
+  function resetEventForm() {
+    setEditingEventId(null);
+    setEventForm(getDefaultEventForm(currentUser?.id));
+  }
+
+  async function handleEventSubmit(event) {
+    event.preventDefault();
+
+    if (!isEventFormValid(eventForm)) {
+      setError(
+        "Title, description, date, time, location, and positive capacity are required.",
+      );
+      return;
+    }
+
+    setEventSaving(true);
+
+    try {
+      const payload = buildEventPayload(eventForm, Boolean(editingEventId));
+      const response = editingEventId
+        ? await api.events.update(editingEventId, payload)
+        : await api.events.create(payload);
+
+      const nextEvent = response.event;
+
+      if (editingEventId) {
+        syncEvent(nextEvent);
+      } else {
+        setEvents((previous) => [nextEvent, ...previous]);
+      }
+
+      resetEventForm();
+      setSuccess(response.message || "Event saved successfully.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to save event"));
+    } finally {
+      setEventSaving(false);
+    }
+  }
+
+  async function handleCancelEvent(eventId) {
+    try {
+      const response = await api.events.cancel(eventId);
+      syncEvent(response.event);
+      setSuccess(response.message || "Event cancelled.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to cancel event"));
+    }
+  }
+
+  async function handleDeleteEvent(eventId) {
+    try {
+      const response = await api.events.remove(eventId);
+      setEvents((previous) =>
+        previous.filter((event) => Number(event.id) !== Number(eventId)),
+      );
+      setSelectedEvent((previous) =>
+        previous && Number(previous.id) === Number(eventId) ? null : previous,
+      );
+      setSuccess(response.message || "Event deleted.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to delete event"));
+    }
+  }
+
+  async function handleSeatAction(eventId, action) {
+    try {
+      const response =
+        action === "reserve"
+          ? await api.events.reserveSeat(eventId)
+          : await api.events.releaseSeat(eventId);
+      syncEvent(response.event);
+      setSuccess(response.message || "Seat inventory updated.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to update seat inventory"));
+    }
+  }
+
+  async function handleBookEvent(event) {
+    if (!currentUser) {
+      setError("Sign in before registering for an event.");
+      setActiveView("account");
+      return;
+    }
+
+    if (event.status !== "upcoming" || Number(event.availableSeats) <= 0) {
+      setError("Only upcoming events with available seats can be booked.");
+      return;
+    }
+
+    try {
+      const registrationResponse = await api.registrations.create({
+        userId: currentUser.id,
+        eventId: event.id,
+        paymentStatus: toOptionalString(bookingDraft.paymentStatus),
+        paymentMethod: toOptionalString(bookingDraft.paymentMethod),
+        transactionId: `TXN-${Date.now()}`,
+        amount: toNumberOrUndefined(bookingDraft.amount),
+      });
+
+      let seatUpdated = true;
+
+      try {
+        const seatResponse = await api.events.reserveSeat(event.id);
+        syncEvent(seatResponse.event);
+      } catch (seatError) {
+        seatUpdated = false;
+        setError(
+          `Registration saved, but seat count was not updated: ${getErrorMessage(
+            seatError,
+          )}`,
+        );
+      }
+
+      await loadRegistrations(currentUser.id);
+
+      if (seatUpdated) {
+        setSuccess(registrationResponse.message || "Registration successful.");
+      }
+    } catch (error) {
+      setError(getErrorMessage(error, "Registration failed"));
+    }
+  }
+
+  async function handleCancelRegistration(registration) {
+    try {
+      const response = await api.registrations.cancel(registration.id);
+      let seatReleased = true;
+
+      try {
+        const seatResponse = await api.events.releaseSeat(registration.eventId);
+        syncEvent(seatResponse.event);
+      } catch (seatError) {
+        seatReleased = false;
+        setError(
+          `Registration cancelled, but seat count was not released: ${getErrorMessage(
+            seatError,
+          )}`,
+        );
+      }
+
+      setRegistrations((previous) =>
+        previous.filter((item) => item.id !== registration.id),
+      );
+
+      if (seatReleased) {
+        setSuccess(response.message || "Registration cancelled.");
+      }
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to cancel registration"));
+    }
+  }
+
+  async function handleNotificationSubmit(event) {
+    event.preventDefault();
+
+    if (!Number(notificationDraft.userId)) {
+      setError("Notification user ID is required.");
+      return;
+    }
+
+    if (
+      notificationDraft.type !== "test" &&
+      !Number(notificationDraft.eventId)
+    ) {
+      setError("Event ID is required for this notification type.");
+      return;
+    }
+
+    const basePayload = {
+      userId: Number(notificationDraft.userId),
+      eventId: toNumberOrUndefined(notificationDraft.eventId),
+      message: toOptionalString(notificationDraft.message),
+    };
+
+    try {
+      if (notificationDraft.type === "event-update") {
+        await api.notifications.createEventUpdate(basePayload);
+      } else if (notificationDraft.type === "reminder") {
+        await api.notifications.createReminder(basePayload);
+      } else if (notificationDraft.type === "payment") {
+        await api.notifications.createPayment({
+          ...basePayload,
+          paymentStatus: notificationDraft.paymentStatus,
+        });
+      } else {
+        await api.notifications.createTest({
+          ...basePayload,
+          type: "general",
+        });
+      }
+
+      setNotificationDraft((draft) => ({
+        ...draft,
+        message: "",
+      }));
+      await loadNotifications(notificationDraft.userId);
+      setSuccess("Notification created.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to create notification"));
+    }
+  }
+
+  async function markNotificationRead(notificationId) {
+    try {
+      const response = await api.notifications.markRead(notificationId);
+      setNotifications((previous) =>
+        previous.map((notification) =>
+          notification.id === notificationId
+            ? response.notification
+            : notification,
+        ),
+      );
+      setSuccess(response.message || "Notification marked as read.");
+    } catch (error) {
+      setError(getErrorMessage(error, "Failed to update notification"));
+    }
+  }
+
+  function submitFilters(event) {
+    event.preventDefault();
+    loadEvents(eventFilters);
+  }
+
+  function clearFilters() {
+    setEventFilters(emptyFilters);
+    loadEvents(emptyFilters);
+  }
+
+  const selectedEventRegistered =
+    selectedEvent &&
+    registrations.some(
+      (registration) =>
+        Number(registration.eventId) === Number(selectedEvent.id),
+    );
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <span className="brand-mark">EM</span>
+          <div>
+            <strong>EventHub</strong>
+            <small>Find and book campus events</small>
+          </div>
+        </div>
+
+        <nav aria-label="Primary navigation">
+          {navItems.map((item) => (
+            <button
+              className={activeView === item.id ? "nav-item active" : "nav-item"}
+              key={item.id}
+              onClick={() => setActiveView(item.id)}
+              type="button"
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="session-card">
+          <span>Signed in</span>
+          {currentUser ? (
+            <>
+              <strong>{currentUser.name || currentUser.email}</strong>
+              <small>User ID {currentUser.id}</small>
+              <button className="text-button" onClick={logout} type="button">
+                Sign out
+              </button>
+              <button
+                className="text-button muted"
+                onClick={() => setActiveView("system")}
+                type="button"
+              >
+                System status
+              </button>
+            </>
+          ) : (
+            <>
+              <strong>Guest</strong>
+              <small>Login to book events.</small>
+              <button
+                className="text-button muted"
+                onClick={() => setActiveView("system")}
+                type="button"
+              >
+                System status
+              </button>
+            </>
+          )}
+        </div>
+      </aside>
+
+      <main className="content">
+        <header className="topbar">
+          <div>
+            <span className="page-label">Event Management</span>
+            <h1>
+              {activeView === "events" && "Discover events"}
+              {activeView === "manage" && "Manage events"}
+              {activeView === "bookings" && "My bookings"}
+              {activeView === "notifications" && "My alerts"}
+              {activeView === "account" && "Account"}
+              {activeView === "system" && "System status"}
+            </h1>
+          </div>
+
+          <div className="topbar-actions">
+            <button
+              className="secondary-button"
+              onClick={() => {
+                loadEvents(eventFilters);
+                if (activeView === "system") {
+                  loadServiceHealth();
+                }
+              }}
+              type="button"
+            >
+              Refresh
+            </button>
+            <button
+              className="primary-button"
+              onClick={() => setActiveView("manage")}
+              type="button"
+            >
+              Host event
+            </button>
+          </div>
+        </header>
+
+        {notice ? (
+          <div className={`notice ${notice.type}`} role="status">
+            <span>{notice.message}</span>
+            <button onClick={() => setNotice(null)} type="button">
+              Dismiss
+            </button>
+          </div>
+        ) : null}
+
+        {activeView === "system" ? (
+          <section className="view-grid">
+            <div className="stats-grid">
+              <article className="stat-card">
+                <span>Total events</span>
+                <strong>{summary.totalEvents}</strong>
+                <small>{summary.upcomingEvents} upcoming</small>
+              </article>
+              <article className="stat-card">
+                <span>Booked seats</span>
+                <strong>{summary.booked}</strong>
+                <small>{summary.capacity} total capacity</small>
+              </article>
+              <article className="stat-card">
+                <span>My registrations</span>
+                <strong>{summary.registrations}</strong>
+                <small>{currentUser ? "Current account" : "Login required"}</small>
+              </article>
+              <article className="stat-card">
+                <span>Unread notifications</span>
+                <strong>{summary.unread}</strong>
+                <small>{currentUser ? "Current account" : "Login required"}</small>
+              </article>
+            </div>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>System health</h2>
+                  <p>Development diagnostics for the API services behind the app.</p>
+                </div>
+                <button
+                  className="secondary-button"
+                  onClick={loadServiceHealth}
+                  type="button"
+                >
+                  Check services
+                </button>
+              </div>
+
+              {servicesLoading ? (
+                <div className="loading-row">Checking services...</div>
+              ) : (
+                <div className="service-grid">
+                  {services.map((service) => (
+                    <ServiceCard key={service.name} service={service} />
+                  ))}
+                </div>
+              )}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Monitoring</h2>
+                  <p>Internal links for local development and troubleshooting.</p>
+                </div>
+              </div>
+              <div className="link-grid">
+                <a href="http://localhost:9090" rel="noreferrer" target="_blank">
+                  Prometheus
+                  <span>localhost:9090</span>
+                </a>
+                <a href="http://localhost:3005" rel="noreferrer" target="_blank">
+                  Grafana
+                  <span>localhost:3005</span>
+                </a>
+              </div>
+            </section>
+          </section>
+        ) : null}
+
+        {activeView === "events" ? (
+          <section className="view-grid">
+            <section className="hero-panel">
+              <div className="hero-copy">
+                <span>Upcoming events</span>
+                <h2>Find your next event.</h2>
+                <p>
+                  Browse live sessions, check open seats, and manage your
+                  bookings in one place.
+                </p>
+                <div className="hero-actions">
+                  <button
+                    className="primary-button"
+                    onClick={() => {
+                      const filters = { ...emptyFilters, status: "upcoming" };
+                      setEventFilters(filters);
+                      loadEvents(filters);
+                    }}
+                    type="button"
+                  >
+                    Show upcoming
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => setActiveView("bookings")}
+                    type="button"
+                  >
+                    View my bookings
+                  </button>
+                </div>
+              </div>
+              <div className="hero-summary">
+                <div>
+                  <span>{summary.upcomingEvents}</span>
+                  <small>Upcoming</small>
+                </div>
+                <div>
+                  <span>{summary.capacity - summary.booked}</span>
+                  <small>Open seats</small>
+                </div>
+                <div>
+                  <span>{nextEvent ? formatDate(nextEvent.date) : "None"}</span>
+                  <small>Next event</small>
+                </div>
+              </div>
+            </section>
+
+            <section className="panel">
+              <form className="filters" onSubmit={submitFilters}>
+                <Field id="search" label="Search">
+                  <input
+                    id="search"
+                    onChange={(event) =>
+                      setEventFilters({
+                        ...eventFilters,
+                        search: event.target.value,
+                      })
+                    }
+                    placeholder="Title or description"
+                    value={eventFilters.search}
+                  />
+                </Field>
+                <Field id="status-filter" label="Status">
+                  <select
+                    id="status-filter"
+                    onChange={(event) =>
+                      setEventFilters({
+                        ...eventFilters,
+                        status: event.target.value,
+                      })
+                    }
+                    value={eventFilters.status}
+                  >
+                    <option value="">All statuses</option>
+                    {eventStatuses.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field id="category-filter" label="Category">
+                  <select
+                    id="category-filter"
+                    onChange={(event) =>
+                      setEventFilters({
+                        ...eventFilters,
+                        category: event.target.value,
+                      })
+                    }
+                    value={eventFilters.category}
+                  >
+                    <option value="">All categories</option>
+                    {categories.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field id="location-filter" label="Location">
+                  <input
+                    id="location-filter"
+                    onChange={(event) =>
+                      setEventFilters({
+                        ...eventFilters,
+                        location: event.target.value,
+                      })
+                    }
+                    placeholder="Room, lab, hall"
+                    value={eventFilters.location}
+                  />
+                </Field>
+                <div className="filter-actions">
+                  <button className="primary-button" type="submit">
+                    Apply
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={clearFilters}
+                    type="button"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <div className="events-layout">
+              <section className="event-list panel">
+                <div className="panel-heading compact">
+                  <div>
+                    <h2>Events</h2>
+                    <p>{events.length} events available</p>
+                  </div>
+                  {eventsLoading ? <span className="mini-loader">Loading</span> : null}
+                </div>
+
+                {eventsError ? <div className="inline-error">{eventsError}</div> : null}
+
+                {events.length === 0 && !eventsLoading ? (
+                  <EmptyState
+                    title="No events found"
+                    message="Create an event or adjust the filters."
+                    action={
+                      <button
+                        className="primary-button"
+                        onClick={() => setActiveView("manage")}
+                        type="button"
+                      >
+                        Create event
+                      </button>
+                    }
+                  />
+                ) : (
+                  <div className="event-cards">
+                    {events.map((event) => (
+                      <article
+                        className={
+                          selectedEvent?.id === event.id
+                            ? "event-card selected"
+                            : "event-card"
+                        }
+                        key={event.id}
+                      >
+                        <div className="event-card-main">
+                          <StatusPill value={event.status} />
+                          <h3>{event.title}</h3>
+                          <p>{event.description}</p>
+                        </div>
+                        <dl className="metadata-grid">
+                          <div>
+                            <dt>Date</dt>
+                            <dd>{formatDate(event.date)}</dd>
+                          </div>
+                          <div>
+                            <dt>Time</dt>
+                            <dd>
+                              {event.startTime} - {event.endTime}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>Location</dt>
+                            <dd>{event.location}</dd>
+                          </div>
+                          <div>
+                            <dt>Seats</dt>
+                            <dd>
+                              {event.availableSeats}/{event.capacity} open
+                            </dd>
+                          </div>
+                        </dl>
+                        <div className="seat-meter">
+                          <span
+                            style={{
+                              width: `${Math.min(
+                                100,
+                                Math.round(
+                                  (Number(event.bookedSeats || 0) /
+                                    Number(event.capacity || 1)) *
+                                    100,
+                                ),
+                              )}%`,
+                            }}
+                          />
+                        </div>
+                        <div className="row-actions">
+                          <button
+                            className="primary-button"
+                            onClick={() => openEventDetails(event.id)}
+                            type="button"
+                          >
+                            Details
+                          </button>
+                          <button
+                            className="secondary-button"
+                            onClick={() => startEditingEvent(event)}
+                            type="button"
+                          >
+                            Edit
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <aside className="panel details-panel">
+                {selectedEvent ? (
+                  <>
+                    <div className="panel-heading compact">
+                      <div>
+                        <h2>{selectedEvent.title}</h2>
+                        <p>{selectedEvent.category || "General"}</p>
+                      </div>
+                      <StatusPill value={selectedEvent.status} />
+                    </div>
+                    <p className="detail-description">{selectedEvent.description}</p>
+                    <dl className="details-list">
+                      <div>
+                        <dt>Date</dt>
+                        <dd>{formatDate(selectedEvent.date)}</dd>
+                      </div>
+                      <div>
+                        <dt>Time</dt>
+                        <dd>
+                          {selectedEvent.startTime} - {selectedEvent.endTime}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Location</dt>
+                        <dd>{selectedEvent.location}</dd>
+                      </div>
+                      <div>
+                        <dt>Seat inventory</dt>
+                        <dd>
+                          {selectedEvent.bookedSeats} booked,{" "}
+                          {selectedEvent.availableSeats} open
+                        </dd>
+                      </div>
+                    </dl>
+
+                    <div className="booking-box">
+                      <h3>Book this event</h3>
+                      <div className="form-grid two">
+                        <Field id="payment-status" label="Payment status">
+                          <select
+                            id="payment-status"
+                            onChange={(event) =>
+                              setBookingDraft({
+                                ...bookingDraft,
+                                paymentStatus: event.target.value,
+                              })
+                            }
+                            value={bookingDraft.paymentStatus}
+                          >
+                            <option value="">None</option>
+                            <option value="paid">paid</option>
+                            <option value="pending">pending</option>
+                            <option value="failed">failed</option>
+                          </select>
+                        </Field>
+                        <Field id="payment-method" label="Payment method">
+                          <select
+                            id="payment-method"
+                            onChange={(event) =>
+                              setBookingDraft({
+                                ...bookingDraft,
+                                paymentMethod: event.target.value,
+                              })
+                            }
+                            value={bookingDraft.paymentMethod}
+                          >
+                            <option value="">None</option>
+                            <option value="card">card</option>
+                            <option value="cash">cash</option>
+                          </select>
+                        </Field>
+                        <Field id="payment-amount" label="Amount">
+                          <input
+                            id="payment-amount"
+                            min="0"
+                            onChange={(event) =>
+                              setBookingDraft({
+                                ...bookingDraft,
+                                amount: event.target.value,
+                              })
+                            }
+                            placeholder="Optional"
+                            step="0.01"
+                            type="number"
+                            value={bookingDraft.amount}
+                          />
+                        </Field>
+                      </div>
+                      <button
+                        className="primary-button wide"
+                        disabled={selectedEventRegistered}
+                        onClick={() => handleBookEvent(selectedEvent)}
+                        type="button"
+                      >
+                        {selectedEventRegistered
+                          ? "Already registered"
+                          : "Register for event"}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <EmptyState
+                    title="Select an event"
+                    message="Open an event to view details and book a seat."
+                  />
+                )}
+              </aside>
+            </div>
+          </section>
+        ) : null}
+
+        {activeView === "manage" ? (
+          <section className="view-grid">
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>{editingEventId ? "Edit event" : "Create event"}</h2>
+                  <p>Create schedules with capacity and location details.</p>
+                </div>
+                {editingEventId ? (
+                  <button
+                    className="secondary-button"
+                    onClick={resetEventForm}
+                    type="button"
+                  >
+                    New instead
+                  </button>
+                ) : null}
+              </div>
+
+              <form className="form-grid" onSubmit={handleEventSubmit}>
+                <Field id="event-title" label="Title">
+                  <input
+                    id="event-title"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, title: event.target.value })
+                    }
+                    value={eventForm.title}
+                  />
+                </Field>
+                <Field id="event-category" label="Category">
+                  <input
+                    id="event-category"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, category: event.target.value })
+                    }
+                    value={eventForm.category}
+                  />
+                </Field>
+                <Field id="event-description" label="Description">
+                  <textarea
+                    id="event-description"
+                    onChange={(event) =>
+                      setEventForm({
+                        ...eventForm,
+                        description: event.target.value,
+                      })
+                    }
+                    rows="4"
+                    value={eventForm.description}
+                  />
+                </Field>
+                <Field id="event-location" label="Location">
+                  <input
+                    id="event-location"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, location: event.target.value })
+                    }
+                    value={eventForm.location}
+                  />
+                </Field>
+                <Field id="event-date" label="Date">
+                  <input
+                    id="event-date"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, date: event.target.value })
+                    }
+                    type="date"
+                    value={eventForm.date}
+                  />
+                </Field>
+                <Field id="event-start" label="Start time">
+                  <input
+                    id="event-start"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, startTime: event.target.value })
+                    }
+                    type="time"
+                    value={eventForm.startTime}
+                  />
+                </Field>
+                <Field id="event-end" label="End time">
+                  <input
+                    id="event-end"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, endTime: event.target.value })
+                    }
+                    type="time"
+                    value={eventForm.endTime}
+                  />
+                </Field>
+                <Field id="event-capacity" label="Capacity">
+                  <input
+                    id="event-capacity"
+                    min="1"
+                    onChange={(event) =>
+                      setEventForm({ ...eventForm, capacity: event.target.value })
+                    }
+                    type="number"
+                    value={eventForm.capacity}
+                  />
+                </Field>
+                <Field id="event-organizer" label="Organizer ID">
+                  <input
+                    id="event-organizer"
+                    min="1"
+                    onChange={(event) =>
+                      setEventForm({
+                        ...eventForm,
+                        organizerId: event.target.value,
+                      })
+                    }
+                    placeholder="Optional"
+                    type="number"
+                    value={eventForm.organizerId}
+                  />
+                </Field>
+                {editingEventId ? (
+                  <Field id="event-status" label="Status">
+                    <select
+                      id="event-status"
+                      onChange={(event) =>
+                        setEventForm({ ...eventForm, status: event.target.value })
+                      }
+                      value={eventForm.status}
+                    >
+                      {eventStatuses.map((status) => (
+                        <option key={status} value={status}>
+                          {status}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                ) : null}
+
+                <div className="form-actions">
+                  <button
+                    className="primary-button"
+                    disabled={eventSaving}
+                    type="submit"
+                  >
+                    {eventSaving
+                      ? "Saving..."
+                      : editingEventId
+                        ? "Update event"
+                        : "Create event"}
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Event administration</h2>
+                  <p>Edit, cancel, or delete scheduled events.</p>
+                </div>
+              </div>
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Event</th>
+                      <th>Status</th>
+                      <th>Seats</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {events.map((event) => (
+                      <tr key={event.id}>
+                        <td>
+                          <strong>{event.title}</strong>
+                          <small>{event.location}</small>
+                        </td>
+                        <td>
+                          <StatusPill value={event.status} />
+                        </td>
+                        <td>
+                          {event.bookedSeats}/{event.capacity}
+                        </td>
+                        <td>
+                          <div className="table-actions">
+                            <button
+                              className="secondary-button"
+                              onClick={() => startEditingEvent(event)}
+                              type="button"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="warning-button"
+                              onClick={() => handleCancelEvent(event.id)}
+                              type="button"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              className="secondary-button"
+                              onClick={() => handleSeatAction(event.id, "reserve")}
+                              type="button"
+                            >
+                              Reserve seat
+                            </button>
+                            <button
+                              className="secondary-button"
+                              onClick={() => handleSeatAction(event.id, "release")}
+                              type="button"
+                            >
+                              Release seat
+                            </button>
+                            <button
+                              className="danger-button"
+                              onClick={() => handleDeleteEvent(event.id)}
+                              type="button"
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          </section>
+        ) : null}
+
+        {activeView === "bookings" ? (
+          <section className="panel">
+            <div className="panel-heading">
+              <div>
+                <h2>Registrations</h2>
+                <p>Your confirmed registrations and payment details.</p>
+              </div>
+              <button
+                className="secondary-button"
+                disabled={!currentUser}
+                onClick={() => loadRegistrations(currentUser?.id)}
+                type="button"
+              >
+                Reload
+              </button>
+            </div>
+
+            {!currentUser ? (
+              <EmptyState
+                title="Login required"
+                message="Sign in to load registrations by user ID."
+                action={
+                  <button
+                    className="primary-button"
+                    onClick={() => setActiveView("account")}
+                    type="button"
+                  >
+                    Go to account
+                  </button>
+                }
+              />
+            ) : registrationsLoading ? (
+              <div className="loading-row">Loading registrations...</div>
+            ) : registrations.length === 0 ? (
+              <EmptyState
+                title="No registrations"
+                message="Register for an upcoming event from the Events page."
+              />
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Registration</th>
+                      <th>Event</th>
+                      <th>Payment</th>
+                      <th>Created</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {registrations.map((registration) => {
+                      const event = eventById.get(Number(registration.eventId));
+
+                      return (
+                        <tr key={registration.id}>
+                          <td>
+                            <strong>#{registration.id}</strong>
+                            <small>{registration.status}</small>
+                          </td>
+                          <td>
+                            <strong>
+                              {event?.title || `Event ${registration.eventId}`}
+                            </strong>
+                            <small>{event?.location || "Load events for details"}</small>
+                          </td>
+                          <td>
+                            {registration.paymentStatus || "not set"}
+                            <small>
+                              {registration.paymentMethod || "no method"}{" "}
+                              {registration.amount != null
+                                ? `$${registration.amount}`
+                                : ""}
+                            </small>
+                          </td>
+                          <td>{formatDateTime(registration.createdAt)}</td>
+                          <td>
+                            <button
+                              className="danger-button"
+                              onClick={() => handleCancelRegistration(registration)}
+                              type="button"
+                            >
+                              Cancel
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        {activeView === "notifications" ? (
+          <section className="view-grid split">
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Create notification</h2>
+                  <p>Create general, event, reminder, or payment notifications.</p>
+                </div>
+              </div>
+
+              <form className="form-grid" onSubmit={handleNotificationSubmit}>
+                <Field id="notification-type" label="Type">
+                  <select
+                    id="notification-type"
+                    onChange={(event) =>
+                      setNotificationDraft({
+                        ...notificationDraft,
+                        type: event.target.value,
+                      })
+                    }
+                    value={notificationDraft.type}
+                  >
+                    {notificationTypes.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field id="notification-user" label="User ID">
+                  <input
+                    id="notification-user"
+                    min="1"
+                    onChange={(event) =>
+                      setNotificationDraft({
+                        ...notificationDraft,
+                        userId: event.target.value,
+                      })
+                    }
+                    type="number"
+                    value={notificationDraft.userId}
+                  />
+                </Field>
+                <Field id="notification-event" label="Event ID">
+                  <input
+                    id="notification-event"
+                    min="1"
+                    onChange={(event) =>
+                      setNotificationDraft({
+                        ...notificationDraft,
+                        eventId: event.target.value,
+                      })
+                    }
+                    placeholder={
+                      notificationDraft.type === "test" ? "Optional" : "Required"
+                    }
+                    type="number"
+                    value={notificationDraft.eventId}
+                  />
+                </Field>
+                {notificationDraft.type === "payment" ? (
+                  <Field id="notification-payment" label="Payment status">
+                    <select
+                      id="notification-payment"
+                      onChange={(event) =>
+                        setNotificationDraft({
+                          ...notificationDraft,
+                          paymentStatus: event.target.value,
+                        })
+                      }
+                      value={notificationDraft.paymentStatus}
+                    >
+                      <option value="success">success</option>
+                      <option value="failed">failed</option>
+                    </select>
+                  </Field>
+                ) : null}
+                <Field id="notification-message" label="Message">
+                  <textarea
+                    id="notification-message"
+                    onChange={(event) =>
+                      setNotificationDraft({
+                        ...notificationDraft,
+                        message: event.target.value,
+                      })
+                    }
+                    placeholder="Optional custom message"
+                    rows="4"
+                    value={notificationDraft.message}
+                  />
+                </Field>
+                <div className="form-actions">
+                  <button className="primary-button" type="submit">
+                    Create notification
+                  </button>
+                  <button
+                    className="secondary-button"
+                    onClick={() => loadNotifications(notificationDraft.userId)}
+                    type="button"
+                  >
+                    Load user notifications
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>User notifications</h2>
+                  <p>
+                    {currentUser
+                      ? `Showing user ${currentUser.id}`
+                      : "Enter a user ID to load notifications."}
+                  </p>
+                </div>
+              </div>
+
+              {notificationsLoading ? (
+                <div className="loading-row">Loading notifications...</div>
+              ) : notifications.length === 0 ? (
+                <EmptyState
+                  title="No notifications"
+                  message="Create a notification or load a different user."
+                />
+              ) : (
+                <div className="notification-list">
+                  {notifications.map((notification) => (
+                    <article
+                      className={`notification-item ${notification.status}`}
+                      key={notification.id}
+                    >
+                      <div>
+                        <StatusPill value={notification.status} />
+                        <h3>{notification.type}</h3>
+                        <p>{notification.message}</p>
+                        <small>
+                          Event {notification.eventId || "none"} ·{" "}
+                          {formatDateTime(notification.createdAt)}
+                        </small>
+                      </div>
+                      {notification.status === "unread" ? (
+                        <button
+                          className="secondary-button"
+                          onClick={() => markNotificationRead(notification.id)}
+                          type="button"
+                        >
+                          Mark read
+                        </button>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+          </section>
+        ) : null}
+
+        {activeView === "account" ? (
+          <section className="view-grid split">
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Login</h2>
+                  <p>Use an existing seeded account or a newly registered profile.</p>
+                </div>
+              </div>
+              <form className="form-grid" onSubmit={handleLogin}>
+                <Field id="login-email" label="Email">
+                  <input
+                    id="login-email"
+                    onChange={(event) =>
+                      setLoginForm({ ...loginForm, email: event.target.value })
+                    }
+                    type="email"
+                    value={loginForm.email}
+                  />
+                </Field>
+                <Field id="login-password" label="Password">
+                  <input
+                    id="login-password"
+                    onChange={(event) =>
+                      setLoginForm({ ...loginForm, password: event.target.value })
+                    }
+                    type="password"
+                    value={loginForm.password}
+                  />
+                </Field>
+                <div className="form-actions">
+                  <button className="primary-button" type="submit">
+                    Login
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Register</h2>
+                  <p>Create a new attendee profile.</p>
+                </div>
+              </div>
+              <form className="form-grid" onSubmit={handleRegister}>
+                <Field id="register-name" label="Name">
+                  <input
+                    id="register-name"
+                    onChange={(event) =>
+                      setRegisterForm({
+                        ...registerForm,
+                        name: event.target.value,
+                      })
+                    }
+                    value={registerForm.name}
+                  />
+                </Field>
+                <Field id="register-email" label="Email">
+                  <input
+                    id="register-email"
+                    onChange={(event) =>
+                      setRegisterForm({
+                        ...registerForm,
+                        email: event.target.value,
+                      })
+                    }
+                    type="email"
+                    value={registerForm.email}
+                  />
+                </Field>
+                <Field id="register-password" label="Password">
+                  <input
+                    id="register-password"
+                    onChange={(event) =>
+                      setRegisterForm({
+                        ...registerForm,
+                        password: event.target.value,
+                      })
+                    }
+                    type="password"
+                    value={registerForm.password}
+                  />
+                </Field>
+                <div className="form-actions">
+                  <button className="primary-button" type="submit">
+                    Register
+                  </button>
+                </div>
+              </form>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>User lookup</h2>
+                  <p>Check a user profile by numeric ID.</p>
+                </div>
+              </div>
+              <form className="inline-form" onSubmit={handleLookupUser}>
+                <input
+                  min="1"
+                  onChange={(event) => setLookupId(event.target.value)}
+                  placeholder="User ID"
+                  type="number"
+                  value={lookupId}
+                />
+                <button className="secondary-button" type="submit">
+                  Lookup
+                </button>
+              </form>
+              {lookupResult ? (
+                <div className="lookup-result">
+                  <strong>{lookupResult.name}</strong>
+                  <span>{lookupResult.email}</span>
+                  <StatusPill value={lookupResult.role} />
+                </div>
+              ) : null}
+            </section>
+          </section>
+        ) : null}
+      </main>
+    </div>
+  );
+}
 
 export default App;

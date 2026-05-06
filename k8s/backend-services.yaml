@@ -1,0 +1,242 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  labels:
+    app: user-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+        - name: user-service
+          image: event-management-system-integration-user-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3001
+          env:
+            - name: PORT
+              value: "3001"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DATABASE_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: JWT_SECRET
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  labels:
+    app: user-service
+spec:
+  selector:
+    app: user-service
+  ports:
+    - name: http
+      port: 3001
+      targetPort: 3001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-service
+  labels:
+    app: event-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: event-service
+  template:
+    metadata:
+      labels:
+        app: event-service
+    spec:
+      containers:
+        - name: event-service
+          image: event-management-system-integration-event-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3002
+          env:
+            - name: PORT
+              value: "3002"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DATABASE_URL
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3002
+            initialDelaySeconds: 8
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3002
+            initialDelaySeconds: 25
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-service
+  labels:
+    app: event-service
+spec:
+  selector:
+    app: event-service
+  ports:
+    - name: http
+      port: 3002
+      targetPort: 3002
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registration-service
+  labels:
+    app: registration-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registration-service
+  template:
+    metadata:
+      labels:
+        app: registration-service
+    spec:
+      containers:
+        - name: registration-service
+          image: event-management-system-integration-registration-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3003
+          env:
+            - name: PORT
+              value: "3003"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DATABASE_URL
+            - name: USER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: USER_SERVICE_URL
+            - name: EVENT_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: EVENT_SERVICE_URL
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3003
+            initialDelaySeconds: 8
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3003
+            initialDelaySeconds: 25
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registration-service
+  labels:
+    app: registration-service
+spec:
+  selector:
+    app: registration-service
+  ports:
+    - name: http
+      port: 3003
+      targetPort: 3003
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      containers:
+        - name: notification-service
+          image: event-management-system-integration-notification-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 3004
+          env:
+            - name: PORT
+              value: "3004"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DATABASE_URL
+          readinessProbe:
+            httpGet:
+              path: /health/db
+              port: 3004
+            initialDelaySeconds: 8
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3004
+            initialDelaySeconds: 20
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  labels:
+    app: notification-service
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - name: http
+      port: 3004
+      targetPort: 3004
