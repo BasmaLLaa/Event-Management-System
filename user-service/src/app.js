@@ -44,6 +44,18 @@ function isDatabaseUnavailableError(error) {
   return databaseErrorCodes.has(error.code);
 }
 
+async function passwordMatches(password, storedPassword) {
+  if (typeof storedPassword !== 'string') {
+    return false;
+  }
+
+  if (storedPassword.startsWith('$2a$') || storedPassword.startsWith('$2b$')) {
+    return bcrypt.compare(password, storedPassword);
+  }
+
+  return password === storedPassword;
+}
+
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -89,9 +101,9 @@ app.post('/users/register', async (req, res) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await pool.query(
       `
-        INSERT INTO users (name, email, password_hash)
-        VALUES ($1, $2, $3)
-        RETURNING id, name, email, created_at
+        INSERT INTO users (name, email, password, role)
+        VALUES ($1, $2, $3, 'user')
+        RETURNING id, name, email, role, created_at
       `,
       [name, email, passwordHash],
     );
@@ -133,7 +145,7 @@ app.post('/users/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, name, email, password_hash FROM users WHERE email = $1',
+      'SELECT id, name, email, password FROM users WHERE email = $1',
       [email],
     );
 
@@ -142,9 +154,9 @@ app.post('/users/login', async (req, res) => {
     }
 
     const user = result.rows[0];
-    const passwordMatches = await bcrypt.compare(password, user.password_hash);
+    const matches = await passwordMatches(password, user.password);
 
-    if (!passwordMatches) {
+    if (!matches) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
@@ -189,7 +201,7 @@ app.get('/users/:id', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, name, email, created_at FROM users WHERE id = $1',
+      'SELECT id, name, email, role, created_at FROM users WHERE id = $1',
       [userId],
     );
 

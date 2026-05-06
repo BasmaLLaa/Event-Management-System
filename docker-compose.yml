@@ -24,6 +24,7 @@ services:
     environment:
       - PORT=3001
       - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+      - JWT_SECRET=event-management-dev-secret
     depends_on:
       - database
     networks:
