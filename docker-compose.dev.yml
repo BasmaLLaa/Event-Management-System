@@ -1,0 +1,20 @@
+services:
+  user-service:
+    environment:
+      - NODE_ENV=development
+
+  event-service:
+    environment:
+      - NODE_ENV=development
+
+  registration-service:
+    environment:
+      - NODE_ENV=development
+
+  notification-service:
+    environment:
+      - NODE_ENV=development
+
+  frontend:
+    environment:
+      - APP_ENV=development

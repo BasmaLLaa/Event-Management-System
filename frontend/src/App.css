@@ -727,7 +727,7 @@ dd {
 .status-completed,
 .status-read,
 .status-success,
-.status-admin {
+.status-organizer {
   background: #dcfce7;
   color: #166534;
 }
@@ -817,6 +817,23 @@ td small {
 
 .empty-state p {
   margin: 0;
+}
+
+.access-denied {
+  max-width: 720px;
+}
+
+.access-denied span {
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.access-denied p {
+  margin-top: 8px;
+  color: #64748b;
 }
 
 .inline-error {

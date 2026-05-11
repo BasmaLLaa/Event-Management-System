@@ -6,6 +6,7 @@ const emptyRegisterForm = {
   name: "",
   email: "",
   password: "",
+  role: "user",
 };
 
 const emptyLoginForm = {
@@ -21,7 +22,6 @@ const emptyFilters = {
 };
 
 const defaultBookingDraft = {
-  paymentStatus: "paid",
   paymentMethod: "card",
   amount: "",
 };
@@ -39,7 +39,7 @@ const navItems = [
   { id: "bookings", label: "My Bookings" },
   { id: "notifications", label: "Alerts" },
   { id: "account", label: "Account" },
-  { id: "manage", label: "Host Event" },
+  { id: "manage", label: "Host Event", organizerOnly: true },
 ];
 
 const eventStatuses = ["upcoming", "cancelled", "completed"];
@@ -72,15 +72,21 @@ function getDefaultEventForm(userId = "") {
 function readStoredSession() {
   try {
     const user = window.localStorage.getItem("event-dashboard-user");
-    const token = window.localStorage.getItem("event-dashboard-token");
 
     return {
-      user: user ? JSON.parse(user) : null,
-      token: token || "",
+      user: normalizeUser(user ? JSON.parse(user) : null),
     };
   } catch {
-    return { user: null, token: "" };
+    return { user: null };
   }
+}
+
+function normalizeRole(role) {
+  return role === "organizer" ? "organizer" : "user";
+}
+
+function normalizeUser(user) {
+  return user ? { ...user, role: normalizeRole(user.role) } : null;
 }
 
 function normalizeEvents(response) {
@@ -190,6 +196,16 @@ function EmptyState({ title, message, action }) {
   );
 }
 
+function AccessDenied() {
+  return (
+    <section className="panel access-denied">
+      <span>Organizer only</span>
+      <h2>Access denied</h2>
+      <p>This area is restricted to organizers.</p>
+    </section>
+  );
+}
+
 function ServiceCard({ service }) {
   return (
     <article className={`service-card ${service.ok ? "online" : "offline"}`}>
@@ -208,7 +224,6 @@ function App() {
   const storedSession = useMemo(() => readStoredSession(), []);
   const [activeView, setActiveView] = useState("events");
   const [currentUser, setCurrentUser] = useState(storedSession.user);
-  const [token, setToken] = useState(storedSession.token);
   const [notice, setNotice] = useState(null);
 
   const [registerForm, setRegisterForm] = useState(emptyRegisterForm);
@@ -241,6 +256,17 @@ function App() {
 
   const [services, setServices] = useState([]);
   const [servicesLoading, setServicesLoading] = useState(false);
+  const [participants, setParticipants] = useState([]);
+  const [participantsEventId, setParticipantsEventId] = useState("");
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+
+  const currentUserId = currentUser?.id;
+  const currentUserRole = currentUser?.role;
+  const isOrganizer = currentUserRole === "organizer";
+  const visibleNavItems = useMemo(
+    () => navItems.filter((item) => !item.organizerOnly || isOrganizer),
+    [isOrganizer],
+  );
 
   const eventById = useMemo(
     () => new Map(events.map((event) => [Number(event.id), event])),
@@ -362,6 +388,32 @@ function App() {
     [setError],
   );
 
+  const loadParticipants = useCallback(
+    async (eventId) => {
+      if (!eventId || !currentUserId || currentUserRole !== "organizer") {
+        return;
+      }
+
+      await Promise.resolve();
+      setParticipantsLoading(true);
+      setParticipantsEventId(String(eventId));
+
+      try {
+        const response = await api.registrations.listByEvent(
+          eventId,
+          currentUserId,
+        );
+        setParticipants(Array.isArray(response.participants) ? response.participants : []);
+      } catch (error) {
+        setParticipants([]);
+        setError(getErrorMessage(error, "Failed to load event participants"));
+      } finally {
+        setParticipantsLoading(false);
+      }
+    },
+    [currentUserId, currentUserRole, setError],
+  );
+
   const loadServiceHealth = useCallback(async () => {
     await Promise.resolve();
     setServicesLoading(true);
@@ -431,6 +483,8 @@ function App() {
     setServicesLoading(false);
   }, []);
 
+
+
   useEffect(() => {
     const timerId = window.setTimeout(() => {
       loadEvents();
@@ -470,12 +524,10 @@ function App() {
         "event-dashboard-user",
         JSON.stringify(currentUser),
       );
-      window.localStorage.setItem("event-dashboard-token", token);
     } else {
       window.localStorage.removeItem("event-dashboard-user");
-      window.localStorage.removeItem("event-dashboard-token");
     }
-  }, [currentUser, token]);
+  }, [currentUser]);
 
   function syncEvent(updatedEvent) {
     setEvents((previous) =>
@@ -508,18 +560,17 @@ function App() {
         name: registerForm.name.trim(),
         email: registerForm.email.trim(),
         password: registerForm.password,
+        role: registerForm.role,
       });
-      setCurrentUser(response.user);
-      setToken(response.token || "");
+      const nextUser = normalizeUser(response.user);
+      setCurrentUser(nextUser);
       setNotificationDraft((draft) => ({
         ...draft,
-        userId: response.user?.id ? String(response.user.id) : draft.userId,
+        userId: nextUser?.id ? String(nextUser.id) : draft.userId,
       }));
       setEventForm((form) => ({
         ...form,
-        organizerId: response.user?.id
-          ? String(response.user.id)
-          : form.organizerId,
+        organizerId: nextUser?.id ? String(nextUser.id) : form.organizerId,
       }));
       setRegisterForm(emptyRegisterForm);
       setActiveView("events");
@@ -542,17 +593,15 @@ function App() {
         email: loginForm.email.trim(),
         password: loginForm.password,
       });
-      setCurrentUser(response.user);
-      setToken(response.token || "");
+      const nextUser = normalizeUser(response.user);
+      setCurrentUser(nextUser);
       setNotificationDraft((draft) => ({
         ...draft,
-        userId: response.user?.id ? String(response.user.id) : draft.userId,
+        userId: nextUser?.id ? String(nextUser.id) : draft.userId,
       }));
       setEventForm((form) => ({
         ...form,
-        organizerId: response.user?.id
-          ? String(response.user.id)
-          : form.organizerId,
+        organizerId: nextUser?.id ? String(nextUser.id) : form.organizerId,
       }));
       setActiveView("events");
       setSuccess(response.message || "Login successful.");
@@ -581,10 +630,11 @@ function App() {
 
   function logout() {
     setCurrentUser(null);
-    setToken("");
     setLookupResult(null);
     setRegistrations([]);
     setNotifications([]);
+    setParticipants([]);
+    setParticipantsEventId("");
     setActiveView("account");
     setSuccess("Signed out.");
   }
@@ -592,7 +642,8 @@ function App() {
   async function openEventDetails(id) {
     try {
       const response = await api.events.getById(id);
-      setSelectedEvent(response);
+      const event = response.event || response;
+      setSelectedEvent(event);
       setActiveView("events");
     } catch (error) {
       setError(getErrorMessage(error, "Failed to load event details"));
@@ -600,6 +651,11 @@ function App() {
   }
 
   function startEditingEvent(event) {
+    if (!isOrganizer) {
+      setError("Organizer access is required to edit events.");
+      return;
+    }
+
     setEditingEventId(event.id);
     setEventForm({
       title: event.title || "",
@@ -624,6 +680,11 @@ function App() {
   async function handleEventSubmit(event) {
     event.preventDefault();
 
+    if (!isOrganizer) {
+      setError("Organizer access is required to save events.");
+      return;
+    }
+
     if (!isEventFormValid(eventForm)) {
       setError(
         "Title, description, date, time, location, and positive capacity are required.",
@@ -634,7 +695,10 @@ function App() {
     setEventSaving(true);
 
     try {
-      const payload = buildEventPayload(eventForm, Boolean(editingEventId));
+      const payload = {
+        ...buildEventPayload(eventForm, Boolean(editingEventId)),
+        organizerId: currentUser.id,
+      };
       const response = editingEventId
         ? await api.events.update(editingEventId, payload)
         : await api.events.create(payload);
@@ -657,8 +721,13 @@ function App() {
   }
 
   async function handleCancelEvent(eventId) {
+    if (!isOrganizer) {
+      setError("Organizer access is required to cancel events.");
+      return;
+    }
+
     try {
-      const response = await api.events.cancel(eventId);
+      const response = await api.events.cancel(eventId, currentUser.id);
       syncEvent(response.event);
       setSuccess(response.message || "Event cancelled.");
     } catch (error) {
@@ -667,8 +736,13 @@ function App() {
   }
 
   async function handleDeleteEvent(eventId) {
+    if (!isOrganizer) {
+      setError("Organizer access is required to delete events.");
+      return;
+    }
+
     try {
-      const response = await api.events.remove(eventId);
+      const response = await api.events.remove(eventId, currentUser.id);
       setEvents((previous) =>
         previous.filter((event) => Number(event.id) !== Number(eventId)),
       );
@@ -682,11 +756,16 @@ function App() {
   }
 
   async function handleSeatAction(eventId, action) {
+    if (!isOrganizer) {
+      setError("Organizer access is required to update seat inventory.");
+      return;
+    }
+
     try {
       const response =
         action === "reserve"
-          ? await api.events.reserveSeat(eventId)
-          : await api.events.releaseSeat(eventId);
+          ? await api.events.reserveSeat(eventId, currentUser.id)
+          : await api.events.releaseSeat(eventId, currentUser.id);
       syncEvent(response.event);
       setSuccess(response.message || "Seat inventory updated.");
     } catch (error) {
@@ -701,8 +780,18 @@ function App() {
       return;
     }
 
-    if (event.status !== "upcoming" || Number(event.availableSeats) <= 0) {
-      setError("Only upcoming events with available seats can be booked.");
+    if (currentUser.role !== "user") {
+      setError("Only user accounts can reserve tickets.");
+      return;
+    }
+
+    if (event.status !== "upcoming") {
+      setError("Only upcoming events can be booked.");
+      return;
+    }
+
+    if (Number(event.availableSeats) <= 0) {
+      setError("This event is fully booked — no tickets available.");
       return;
     }
 
@@ -710,31 +799,13 @@ function App() {
       const registrationResponse = await api.registrations.create({
         userId: currentUser.id,
         eventId: event.id,
-        paymentStatus: toOptionalString(bookingDraft.paymentStatus),
         paymentMethod: toOptionalString(bookingDraft.paymentMethod),
-        transactionId: `TXN-${Date.now()}`,
         amount: toNumberOrUndefined(bookingDraft.amount),
       });
 
-      let seatUpdated = true;
-
-      try {
-        const seatResponse = await api.events.reserveSeat(event.id);
-        syncEvent(seatResponse.event);
-      } catch (seatError) {
-        seatUpdated = false;
-        setError(
-          `Registration saved, but seat count was not updated: ${getErrorMessage(
-            seatError,
-          )}`,
-        );
-      }
-
+      await loadEvents(eventFilters);
       await loadRegistrations(currentUser.id);
-
-      if (seatUpdated) {
-        setSuccess(registrationResponse.message || "Registration successful.");
-      }
+      setSuccess(registrationResponse.message || "Registration successful.");
     } catch (error) {
       setError(getErrorMessage(error, "Registration failed"));
     }
@@ -742,28 +813,15 @@ function App() {
 
   async function handleCancelRegistration(registration) {
     try {
-      const response = await api.registrations.cancel(registration.id);
-      let seatReleased = true;
-
-      try {
-        const seatResponse = await api.events.releaseSeat(registration.eventId);
-        syncEvent(seatResponse.event);
-      } catch (seatError) {
-        seatReleased = false;
-        setError(
-          `Registration cancelled, but seat count was not released: ${getErrorMessage(
-            seatError,
-          )}`,
-        );
-      }
+      const response = await api.registrations.cancel(registration.id, {
+        userId: currentUser.id,
+      });
 
       setRegistrations((previous) =>
         previous.filter((item) => item.id !== registration.id),
       );
-
-      if (seatReleased) {
-        setSuccess(response.message || "Registration cancelled.");
-      }
+      await loadEvents(eventFilters);
+      setSuccess(response.message || "Registration cancelled.");
     } catch (error) {
       setError(getErrorMessage(error, "Failed to cancel registration"));
     }
@@ -771,6 +829,11 @@ function App() {
 
   async function handleNotificationSubmit(event) {
     event.preventDefault();
+
+    if (!isOrganizer) {
+      setError("Organizer access is required to create notifications.");
+      return;
+    }
 
     if (!Number(notificationDraft.userId)) {
       setError("Notification user ID is required.");
@@ -786,6 +849,7 @@ function App() {
     }
 
     const basePayload = {
+      organizerId: currentUser.id,
       userId: Number(notificationDraft.userId),
       eventId: toNumberOrUndefined(notificationDraft.eventId),
       message: toOptionalString(notificationDraft.message),
@@ -821,7 +885,10 @@ function App() {
 
   async function markNotificationRead(notificationId) {
     try {
-      const response = await api.notifications.markRead(notificationId);
+      const response = await api.notifications.markRead(
+        notificationId,
+        currentUser.id,
+      );
       setNotifications((previous) =>
         previous.map((notification) =>
           notification.id === notificationId
@@ -864,7 +931,7 @@ function App() {
         </div>
 
         <nav aria-label="Primary navigation">
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <button
               className={activeView === item.id ? "nav-item active" : "nav-item"}
               key={item.id}
@@ -882,6 +949,7 @@ function App() {
             <>
               <strong>{currentUser.name || currentUser.email}</strong>
               <small>User ID {currentUser.id}</small>
+              <StatusPill value={currentUser.role} />
               <button className="text-button" onClick={logout} type="button">
                 Sign out
               </button>
@@ -936,13 +1004,15 @@ function App() {
             >
               Refresh
             </button>
-            <button
-              className="primary-button"
-              onClick={() => setActiveView("manage")}
-              type="button"
-            >
-              Host event
-            </button>
+            {isOrganizer ? (
+              <button
+                className="primary-button"
+                onClick={() => setActiveView("manage")}
+                type="button"
+              >
+                Host event
+              </button>
+            ) : null}
           </div>
         </header>
 
@@ -1172,6 +1242,7 @@ function App() {
                     title="No events found"
                     message="Create an event or adjust the filters."
                     action={
+                      isOrganizer ? (
                       <button
                         className="primary-button"
                         onClick={() => setActiveView("manage")}
@@ -1179,6 +1250,7 @@ function App() {
                       >
                         Create event
                       </button>
+                      ) : null
                     }
                   />
                 ) : (
@@ -1241,13 +1313,15 @@ function App() {
                           >
                             Details
                           </button>
-                          <button
-                            className="secondary-button"
-                            onClick={() => startEditingEvent(event)}
-                            type="button"
-                          >
-                            Edit
-                          </button>
+                          {isOrganizer ? (
+                            <button
+                              className="secondary-button"
+                              onClick={() => startEditingEvent(event)}
+                              type="button"
+                            >
+                              Edit
+                            </button>
+                          ) : null}
                         </div>
                       </article>
                     ))}
@@ -1293,23 +1367,6 @@ function App() {
                     <div className="booking-box">
                       <h3>Book this event</h3>
                       <div className="form-grid two">
-                        <Field id="payment-status" label="Payment status">
-                          <select
-                            id="payment-status"
-                            onChange={(event) =>
-                              setBookingDraft({
-                                ...bookingDraft,
-                                paymentStatus: event.target.value,
-                              })
-                            }
-                            value={bookingDraft.paymentStatus}
-                          >
-                            <option value="">None</option>
-                            <option value="paid">paid</option>
-                            <option value="pending">pending</option>
-                            <option value="failed">failed</option>
-                          </select>
-                        </Field>
                         <Field id="payment-method" label="Payment method">
                           <select
                             id="payment-method"
@@ -1345,12 +1402,23 @@ function App() {
                       </div>
                       <button
                         className="primary-button wide"
-                        disabled={selectedEventRegistered}
+                        disabled={
+                          selectedEventRegistered ||
+                          currentUser?.role === "organizer" ||
+                          selectedEvent.status !== "upcoming" ||
+                          Number(selectedEvent.availableSeats) <= 0
+                        }
                         onClick={() => handleBookEvent(selectedEvent)}
                         type="button"
                       >
-                        {selectedEventRegistered
+                        {currentUser?.role === "organizer"
+                          ? "Organizer account"
+                          : selectedEventRegistered
                           ? "Already registered"
+                          : selectedEvent.status !== "upcoming"
+                          ? "Event not available"
+                          : Number(selectedEvent.availableSeats) <= 0
+                          ? "Fully booked"
                           : "Register for event"}
                       </button>
                     </div>
@@ -1367,6 +1435,7 @@ function App() {
         ) : null}
 
         {activeView === "manage" ? (
+          isOrganizer ? (
           <section className="view-grid">
             <section className="panel">
               <div className="panel-heading">
@@ -1519,7 +1588,7 @@ function App() {
             <section className="panel">
               <div className="panel-heading">
                 <div>
-                  <h2>Event administration</h2>
+                  <h2>Event management</h2>
                   <p>Edit, cancel, or delete scheduled events.</p>
                 </div>
               </div>
@@ -1577,6 +1646,13 @@ function App() {
                               Release seat
                             </button>
                             <button
+                              className="secondary-button"
+                              onClick={() => loadParticipants(event.id)}
+                              type="button"
+                            >
+                              Participants
+                            </button>
+                            <button
                               className="danger-button"
                               onClick={() => handleDeleteEvent(event.id)}
                               type="button"
@@ -1591,7 +1667,66 @@ function App() {
                 </table>
               </div>
             </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <div>
+                  <h2>Participants</h2>
+                  <p>
+                    {participantsEventId
+                      ? `Showing registrations for event ${participantsEventId}`
+                      : "Select an event from the management table."}
+                  </p>
+                </div>
+              </div>
+
+              {participantsLoading ? (
+                <div className="loading-row">Loading participants...</div>
+              ) : participants.length === 0 ? (
+                <EmptyState
+                  title="No participants loaded"
+                  message="Use the Participants action on an event to view registration and payment status."
+                />
+              ) : (
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Registration</th>
+                        <th>User</th>
+                        <th>Payment</th>
+                        <th>Created</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {participants.map((participant) => (
+                        <tr key={participant.id}>
+                          <td>
+                            <strong>#{participant.id}</strong>
+                            <small>{participant.status}</small>
+                          </td>
+                          <td>User {participant.userId}</td>
+                          <td>
+                            {participant.paymentStatus || "not set"}
+                            <small>
+                              {participant.paymentMethod || "no method"}{" "}
+                              {participant.amount != null
+                                ? `$${participant.amount}`
+                                : ""}
+                            </small>
+                          </td>
+                          <td>{formatDateTime(participant.createdAt)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </section>
           </section>
+          ) : (
+            <AccessDenied />
+          )
         ) : null}
 
         {activeView === "bookings" ? (
@@ -1690,7 +1825,8 @@ function App() {
         ) : null}
 
         {activeView === "notifications" ? (
-          <section className="view-grid split">
+          <section className={isOrganizer ? "view-grid split" : "view-grid"}>
+            {isOrganizer ? (
             <section className="panel">
               <div className="panel-heading">
                 <div>
@@ -1784,16 +1920,19 @@ function App() {
                   <button className="primary-button" type="submit">
                     Create notification
                   </button>
-                  <button
-                    className="secondary-button"
-                    onClick={() => loadNotifications(notificationDraft.userId)}
-                    type="button"
-                  >
-                    Load user notifications
-                  </button>
+                  {isOrganizer ? (
+                    <button
+                      className="secondary-button"
+                      onClick={() => loadNotifications(notificationDraft.userId)}
+                      type="button"
+                    >
+                      Load user notifications
+                    </button>
+                  ) : null}
                 </div>
               </form>
             </section>
+            ) : null}
 
             <section className="panel">
               <div className="panel-heading">
@@ -1812,7 +1951,11 @@ function App() {
               ) : notifications.length === 0 ? (
                 <EmptyState
                   title="No notifications"
-                  message="Create a notification or load a different user."
+                  message={
+                    isOrganizer
+                      ? "Create a notification or load a different user."
+                      : "You do not have any alerts yet."
+                  }
                 />
               ) : (
                 <div className="notification-list">
@@ -1931,6 +2074,21 @@ function App() {
                     value={registerForm.password}
                   />
                 </Field>
+                <Field id="register-role" label="Role">
+                  <select
+                    id="register-role"
+                    onChange={(event) =>
+                      setRegisterForm({
+                        ...registerForm,
+                        role: event.target.value,
+                      })
+                    }
+                    value={registerForm.role}
+                  >
+                    <option value="user">User</option>
+                    <option value="organizer">Organizer</option>
+                  </select>
+                </Field>
                 <div className="form-actions">
                   <button className="primary-button" type="submit">
                     Register
@@ -1939,6 +2097,7 @@ function App() {
               </form>
             </section>
 
+            {isOrganizer ? (
             <section className="panel">
               <div className="panel-heading">
                 <div>
@@ -1966,6 +2125,7 @@ function App() {
                 </div>
               ) : null}
             </section>
+            ) : null}
           </section>
         ) : null}
       </main>

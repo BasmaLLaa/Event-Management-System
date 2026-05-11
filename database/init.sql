@@ -61,7 +61,7 @@ CREATE TABLE notifications (
 );
 
 INSERT INTO users (name, email, password, role) VALUES
-('Beso Admin', 'beso.admin@example.com', '123456', 'admin'),
+('Beso Organizer', 'beso.organizer@example.com', '123456', 'organizer'),
 ('Sasa User', 'sasa@example.com', '123456', 'user'),
 ('Soz User', 'soz@example.com', '123456', 'user'),
 ('Mario User', 'mario@example.com', '123456', 'user'),

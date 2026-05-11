@@ -2,21 +2,16 @@ require('dotenv').config();
 
 const { Pool } = require('pg');
 
-const pool = new Pool(
-  process.env.DATABASE_URL
-    ? {
-        connectionString: process.env.DATABASE_URL,
-        connectionTimeoutMillis: 3000,
-      }
-    : {
-        host: process.env.DB_HOST || 'localhost',
-        port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 5432,
-        database: process.env.DB_NAME || 'event_management',
-        user: process.env.DB_USER || 'postgres',
-        password: process.env.DB_PASSWORD || 'postgres',
-        connectionTimeoutMillis: 3000,
-      },
-);
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL is required');
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  connectionTimeoutMillis: 3000,
+});
 
 const createUsersTableQuery = `
   CREATE TABLE IF NOT EXISTS users (
@@ -40,6 +35,31 @@ async function prepareDatabase() {
 
   if (!usersTableReady) {
     await pool.query(createUsersTableQuery);
+    await pool.query(
+      "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'",
+    );
+    await pool.query(
+      "UPDATE users SET role = 'organizer' WHERE role = 'admin'",
+    );
+    await pool.query(
+      "UPDATE users SET role = 'user' WHERE role IS NULL OR role NOT IN ('organizer', 'user')",
+    );
+
+    if (process.env.INITIAL_ORGANIZER_EMAIL) {
+      const organizerEmail = process.env.INITIAL_ORGANIZER_EMAIL.trim().toLowerCase();
+
+      if (organizerEmail) {
+        const result = await pool.query(
+          "UPDATE users SET role = 'organizer' WHERE LOWER(email) = $1 RETURNING id, email",
+          [organizerEmail],
+        );
+
+        if (result.rowCount > 0) {
+          console.log(`[Database] Bootstrapped organizer user ${organizerEmail}.`);
+        }
+      }
+    }
+
     usersTableReady = true;
   }
 }

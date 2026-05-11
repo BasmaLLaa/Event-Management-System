@@ -1,0 +1,43 @@
+services:
+  database:
+    restart: unless-stopped
+
+  rabbitmq:
+    restart: unless-stopped
+
+  user-service:
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+
+  event-service:
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+
+  registration-service:
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+
+  notification-service:
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+
+  frontend:
+    restart: unless-stopped
+    environment:
+      - APP_ENV=production
+
+  prometheus:
+    restart: unless-stopped
+
+  loki:
+    restart: unless-stopped
+
+  promtail:
+    restart: unless-stopped
+
+  grafana:
+    restart: unless-stopped

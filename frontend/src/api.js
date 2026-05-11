@@ -27,6 +27,8 @@ const client = axios.create({
   },
 });
 
+
+
 function cleanParams(params = {}) {
   return Object.fromEntries(
     Object.entries(params).filter(([, value]) => value !== "" && value != null),
@@ -100,25 +102,32 @@ export const api = {
         url: `${serviceBaseUrls.event}/events/${id}`,
         data: payload,
       }),
-    remove: (id) =>
+    remove: (id, organizerId) =>
       request({
         method: "delete",
         url: `${serviceBaseUrls.event}/events/${id}`,
+        params: { organizerId },
+        data: { organizerId },
+        headers: { "x-organizer-id": String(organizerId) },
       }),
-    cancel: (id) =>
+    cancel: (id, organizerId) =>
       request({
         method: "patch",
         url: `${serviceBaseUrls.event}/events/${id}/cancel`,
+        data: { organizerId },
+        headers: { "x-organizer-id": String(organizerId) },
       }),
-    reserveSeat: (id) =>
+    reserveSeat: (id, organizerId) =>
       request({
         method: "patch",
         url: `${serviceBaseUrls.event}/events/${id}/reserve-seat`,
+        data: { organizerId },
       }),
-    releaseSeat: (id) =>
+    releaseSeat: (id, organizerId) =>
       request({
         method: "patch",
         url: `${serviceBaseUrls.event}/events/${id}/release-seat`,
+        data: { organizerId },
       }),
   },
   registrations: {
@@ -133,10 +142,17 @@ export const api = {
         method: "get",
         url: `${serviceBaseUrls.registration}/registrations/user/${userId}`,
       }),
-    cancel: (id) =>
+    listByEvent: (eventId, organizerId) =>
+      request({
+        method: "get",
+        url: `${serviceBaseUrls.registration}/registrations/event/${eventId}`,
+        params: cleanParams({ organizerId }),
+      }),
+    cancel: (id, payload) =>
       request({
         method: "delete",
         url: `${serviceBaseUrls.registration}/registrations/${id}`,
+        data: payload,
       }),
   },
   notifications: {
@@ -145,10 +161,11 @@ export const api = {
         method: "get",
         url: `${serviceBaseUrls.notification}/notifications/user/${userId}`,
       }),
-    markRead: (id) =>
+    markRead: (id, userId) =>
       request({
         method: "put",
         url: `${serviceBaseUrls.notification}/notifications/${id}/read`,
+        data: { userId },
       }),
     createTest: (payload) =>
       request({
@@ -189,7 +206,7 @@ export const api = {
     event: () =>
       request({
         method: "get",
-        url: `${serviceBaseUrls.event}/`,
+        url: `${serviceBaseUrls.event}/health`,
       }),
     registration: () =>
       request({

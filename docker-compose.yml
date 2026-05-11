@@ -1,19 +1,31 @@
 services:
   database:
     image: postgres:15
-    container_name: database
     ports:
-      - "5432:5432"
+      - "${POSTGRES_HOST_PORT:-5432}:5432"
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=event_management
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_DB=${POSTGRES_DB:-event_management}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d event_management"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - event-network
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "${RABBITMQ_HOST_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_HOST_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD-SHELL", "rabbitmq-diagnostics -q ping"]
+      interval: 10s
       timeout: 5s
       retries: 10
     networks:
@@ -21,13 +33,13 @@ services:
 
   user-service:
     build: ./user-service
-    container_name: user-service
     ports:
-      - "3001:3001"
+      - "${USER_SERVICE_HOST_PORT:-3001}:3001"
     environment:
       - PORT=3001
-      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
-      - JWT_SECRET=event-management-dev-secret
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@database:5432/event_management}
+      - INITIAL_ORGANIZER_EMAIL=${INITIAL_ORGANIZER_EMAIL:-beso.organizer@example.com}
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       database:
         condition: service_healthy
@@ -36,28 +48,35 @@ services:
 
   event-service:
     build: ./event-service
-    container_name: event-service
     ports:
-      - "3002:3002"
+      - "${EVENT_SERVICE_HOST_PORT:-3002}:3002"
     environment:
       - PORT=3002
-      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@database:5432/event_management}
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://rabbitmq:5672}
+      - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-service:3001}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-event-management-internal-secret}
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       database:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - event-network
 
   registration-service:
     build: ./registration-service
-    container_name: registration-service
     ports:
-      - "3003:3003"
+      - "${REGISTRATION_SERVICE_HOST_PORT:-3003}:3003"
     environment:
       - PORT=3003
-      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
-      - USER_SERVICE_URL=http://user-service:3001
-      - EVENT_SERVICE_URL=http://event-service:3002
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@database:5432/event_management}
+      - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-service:3001}
+      - EVENT_SERVICE_URL=${EVENT_SERVICE_URL:-http://event-service:3002}
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://rabbitmq:5672}
+      - INTERNAL_SERVICE_TOKEN=${INTERNAL_SERVICE_TOKEN:-event-management-internal-secret}
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       database:
         condition: service_healthy
@@ -65,42 +84,48 @@ services:
         condition: service_started
       event-service:
         condition: service_started
+      rabbitmq:
+        condition: service_healthy
     networks:
       - event-network
 
   notification-service:
     build: ./notification-service
-    container_name: notification-service
     ports:
-      - "3004:3004"
+      - "${NOTIFICATION_SERVICE_HOST_PORT:-3004}:3004"
     environment:
       - PORT=3004
-      - DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@database:5432/event_management}
+      - RABBITMQ_URL=${RABBITMQ_URL:-amqp://rabbitmq:5672}
+      - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-service:3001}
+      - NODE_ENV=${NODE_ENV:-development}
     depends_on:
       database:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
     networks:
       - event-network
 
   frontend:
     build: ./frontend
-    container_name: frontend
     ports:
-      - "3000:3000"
+      - "${FRONTEND_HOST_PORT:-3000}:3000"
     environment:
       - PORT=3000
-      - VITE_API_BASE_URL=/api
-      - USER_SERVICE_URL=http://user-service:3001
-      - EVENT_SERVICE_URL=http://event-service:3002
-      - REGISTRATION_SERVICE_URL=http://registration-service:3003
-      - NOTIFICATION_SERVICE_URL=http://notification-service:3004
+      - VITE_API_BASE_URL=${VITE_API_BASE_URL:-/api}
+      - USER_SERVICE_URL=${USER_SERVICE_URL:-http://user-service:3001}
+      - EVENT_SERVICE_URL=${EVENT_SERVICE_URL:-http://event-service:3002}
+      - REGISTRATION_SERVICE_URL=${REGISTRATION_SERVICE_URL:-http://registration-service:3003}
+      - NOTIFICATION_SERVICE_URL=${NOTIFICATION_SERVICE_URL:-http://notification-service:3004}
+      - APP_ENV=${APP_ENV:-development}
     depends_on:
       - user-service
       - event-service
       - registration-service
       - notification-service
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -109,9 +134,8 @@ services:
 
   prometheus:
     image: prom/prometheus
-    container_name: prometheus
     ports:
-      - "9090:9090"
+      - "${PROMETHEUS_HOST_PORT:-9090}:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
     depends_on:
@@ -122,18 +146,45 @@ services:
     networks:
       - event-network
 
+  loki:
+    image: grafana/loki:3.1.2
+    ports:
+      - "${LOKI_HOST_PORT:-3300}:3100"
+    command: -config.file=/etc/loki/config.yml
+    volumes:
+      - ./monitoring/loki-config.yml:/etc/loki/config.yml
+      - loki-data:/loki
+    networks:
+      - event-network
+
+  promtail:
+    image: grafana/promtail:3.1.2
+    command: -config.file=/etc/promtail/config.yml
+    volumes:
+      - ./monitoring/promtail-compose.yml:/etc/promtail/config.yml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - promtail-positions:/tmp
+    depends_on:
+      - loki
+    networks:
+      - event-network
+
   grafana:
     image: grafana/grafana
-    container_name: grafana
     ports:
-      - "3005:3000"
+      - "${GRAFANA_HOST_PORT:-3005}:3000"
     depends_on:
       - prometheus
+      - loki
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
     networks:
       - event-network
 
 volumes:
   postgres-data:
+  loki-data:
+  promtail-positions:
 
 networks:
   event-network:

@@ -3,11 +3,22 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
+
+const PORT = process.env.PORT;
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!PORT || !DATABASE_URL) {
+  console.error('Missing required environment variables:');
+  console.error({
+    PORT: Boolean(PORT),
+    DATABASE_URL: Boolean(DATABASE_URL),
+  });
+  process.exit(1);
+}
+
 const { pool, initDb, checkDbConnection } = require('./db');
 
 const app = express();
-const PORT = process.env.PORT || 3001;
 const DATABASE_UNAVAILABLE_MESSAGE = 'Database unavailable. Please try again later.';
 
 app.use(cors());
@@ -26,6 +37,10 @@ async function ensureDatabaseAvailable(res) {
 
 function getCleanString(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeRole(role) {
+  return role === 'organizer' ? 'organizer' : 'user';
 }
 
 function isDatabaseUnavailableError(error) {
@@ -63,6 +78,43 @@ app.get('/health', (req, res) => {
   });
 });
 
+app.get('/', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) FROM users');
+
+    return res.json({
+      service: 'User Service',
+      status: 'Running',
+      port: Number(PORT),
+      database: 'PostgreSQL connected',
+      totalUsers: Number(result.rows[0].count),
+    });
+  } catch (error) {
+    return res.status(500).json({
+      service: 'User Service',
+      status: 'Running',
+      database: 'PostgreSQL disconnected',
+      error: error.message,
+    });
+  }
+});
+
+app.get('/db-test', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW()');
+
+    return res.json({
+      message: 'Database connection successful',
+      time: result.rows[0].now,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      message: 'Database connection failed',
+      error: error.message,
+    });
+  }
+});
+
 app.get('/health/db', async (req, res) => {
   const connected = await checkDbConnection();
 
@@ -80,10 +132,28 @@ app.get('/health/db', async (req, res) => {
   });
 });
 
+app.get('/metrics', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT COUNT(*) FROM users');
+
+    res.type('text/plain');
+    return res.send(`user_service_up 1
+user_total ${result.rows[0].count}
+`);
+  } catch (error) {
+    res.status(500);
+    res.type('text/plain');
+    return res.send(`user_service_up 0
+user_service_error "${error.message}"
+`);
+  }
+});
+
 app.post('/users/register', async (req, res) => {
   const name = getCleanString(req.body.name);
   const email = getCleanString(req.body.email).toLowerCase();
   const password = typeof req.body.password === 'string' ? req.body.password : '';
+  const role = normalizeRole(getCleanString(req.body.role).toLowerCase());
 
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email, and password are required' });
@@ -102,15 +172,16 @@ app.post('/users/register', async (req, res) => {
     const result = await pool.query(
       `
         INSERT INTO users (name, email, password, role)
-        VALUES ($1, $2, $3, 'user')
+        VALUES ($1, $2, $3, $4)
         RETURNING id, name, email, role, created_at
       `,
-      [name, email, passwordHash],
+      [name, email, passwordHash, role],
     );
+    const user = result.rows[0];
 
     return res.status(201).json({
       message: 'User registered successfully',
-      user: result.rows[0],
+      user,
     });
   } catch (error) {
     if (error.code === '23505') {
@@ -138,14 +209,9 @@ app.post('/users/login', async (req, res) => {
     return undefined;
   }
 
-  if (!process.env.JWT_SECRET) {
-    console.error('[Auth] JWT_SECRET is not configured.');
-    return res.status(500).json({ message: 'JWT secret is not configured' });
-  }
-
   try {
     const result = await pool.query(
-      'SELECT id, name, email, password FROM users WHERE email = $1',
+      'SELECT id, name, email, password, role FROM users WHERE email = $1',
       [email],
     );
 
@@ -154,28 +220,20 @@ app.post('/users/login', async (req, res) => {
     }
 
     const user = result.rows[0];
+    const role = normalizeRole(user.role);
     const matches = await passwordMatches(password, user.password);
 
     if (!matches) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-      },
-      process.env.JWT_SECRET,
-      { expiresIn: '1h' },
-    );
-
     return res.status(200).json({
       message: 'Login successful',
-      token,
       user: {
         id: user.id,
         name: user.name,
         email: user.email,
+        role,
       },
     });
   } catch (error) {
@@ -216,6 +274,40 @@ app.get('/users/:id', async (req, res) => {
     }
 
     console.error(`[GetUserById] Unexpected error: ${error.message}`);
+    return res.status(500).json({ message: 'Unexpected server error' });
+  }
+});
+
+app.get('/users/:id/role', async (req, res) => {
+  const userId = Number.parseInt(req.params.id, 10);
+
+  if (!Number.isInteger(userId) || userId < 1) {
+    return res.status(400).json({ message: 'User ID must be a positive number' });
+  }
+
+  if (!(await ensureDatabaseAvailable(res))) {
+    return undefined;
+  }
+
+  try {
+    const result = await pool.query('SELECT id, role FROM users WHERE id = $1', [
+      userId,
+    ]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    return res.status(200).json({
+      id: result.rows[0].id,
+      role: normalizeRole(result.rows[0].role),
+    });
+  } catch (error) {
+    if (isDatabaseUnavailableError(error)) {
+      return res.status(503).json({ message: DATABASE_UNAVAILABLE_MESSAGE });
+    }
+
+    console.error(`[GetUserRole] Unexpected error: ${error.message}`);
     return res.status(500).json({ message: 'Unexpected server error' });
   }
 });

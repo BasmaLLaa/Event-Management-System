@@ -28,11 +28,11 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: DATABASE_URL
-            - name: JWT_SECRET
+            - name: INITIAL_ORGANIZER_EMAIL
               valueFrom:
                 secretKeyRef:
                   name: app-secrets
-                  key: JWT_SECRET
+                  key: INITIAL_ORGANIZER_EMAIL
           readinessProbe:
             httpGet:
               path: /health
@@ -90,15 +90,30 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: RABBITMQ_URL
+            - name: USER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: USER_SERVICE_URL
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: INTERNAL_SERVICE_TOKEN
           readinessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 3002
             initialDelaySeconds: 8
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 3002
             initialDelaySeconds: 25
             periodSeconds: 10
@@ -157,15 +172,25 @@ spec:
                 configMapKeyRef:
                   name: app-config
                   key: EVENT_SERVICE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: RABBITMQ_URL
+            - name: INTERNAL_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: INTERNAL_SERVICE_TOKEN
           readinessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 3003
             initialDelaySeconds: 8
             periodSeconds: 5
           livenessProbe:
             httpGet:
-              path: /
+              path: /health
               port: 3003
             initialDelaySeconds: 25
             periodSeconds: 10
@@ -214,6 +239,16 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: DATABASE_URL
+            - name: RABBITMQ_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: RABBITMQ_URL
+            - name: USER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config
+                  key: USER_SERVICE_URL
           readinessProbe:
             httpGet:
               path: /health/db

@@ -8,17 +8,13 @@ It does not include a database image, Docker Compose file, frontend, Event Servi
 
 ```env
 PORT=3001
-DB_HOST=db
-DB_PORT=5432
-DB_NAME=eventdb
-DB_USER=postgres
-DB_PASSWORD=postgres
-JWT_SECRET=user_service_secret
+DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management
+INITIAL_ORGANIZER_EMAIL=beso.organizer@example.com
 ```
 
-`DB_HOST` must be the hostname that the User Service container can use to reach PostgreSQL. Later this may be a Docker container or service name such as `db`, or a Kubernetes service name such as `postgres-service`. If you run the service outside Docker and PostgreSQL is local, `DB_HOST` may be `localhost`.
+`DATABASE_URL` must use the hostname that the User Service container can use to reach PostgreSQL. In Docker Compose this is normally `database`.
 
-The service uses PostgreSQL through the `pg` package and creates the `users` table automatically when PostgreSQL is reachable.
+The service uses PostgreSQL through the `pg` package and creates/migrates the `users` table automatically when PostgreSQL is reachable. Supported roles are `user` and `organizer`.
 
 ## Build the Docker Image
 
@@ -35,12 +31,7 @@ You can run the service now even if PostgreSQL is not available:
 ```bash
 docker run -p 3001:3001 \
   -e PORT=3001 \
-  -e DB_HOST=db \
-  -e DB_PORT=5432 \
-  -e DB_NAME=eventdb \
-  -e DB_USER=postgres \
-  -e DB_PASSWORD=postgres \
-  -e JWT_SECRET=user_service_secret \
+  -e DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management \
   event-user-service:latest
 ```
 
@@ -57,16 +48,11 @@ Use the same image and pass the real PostgreSQL connection values:
 ```bash
 docker run -p 3001:3001 \
   -e PORT=3001 \
-  -e DB_HOST=db \
-  -e DB_PORT=5432 \
-  -e DB_NAME=eventdb \
-  -e DB_USER=postgres \
-  -e DB_PASSWORD=postgres \
-  -e JWT_SECRET=user_service_secret \
+  -e DATABASE_URL=postgresql://postgres:postgres@database:5432/event_management \
   event-user-service:latest
 ```
 
-If PostgreSQL runs in another Docker container, both containers must be able to reach each other on the same Docker network, and `DB_HOST` should be the database container or service name, for example `db`.
+If PostgreSQL runs in another Docker container, both containers must be able to reach each other on the same Docker network, and the database host inside `DATABASE_URL` should be the database container or service name.
 
 ## Endpoints
 
@@ -122,7 +108,8 @@ Request body:
 {
   "name": "Sasa",
   "email": "sasa@example.com",
-  "password": "123456"
+  "password": "123456",
+  "role": "user"
 }
 ```
 
@@ -135,6 +122,7 @@ Success response:
     "id": 1,
     "name": "Sasa",
     "email": "sasa@example.com",
+    "role": "user",
     "created_at": "..."
   }
 }
@@ -176,11 +164,11 @@ Success response:
 ```json
 {
   "message": "Login successful",
-  "token": "jwt_token_here",
   "user": {
     "id": 1,
     "name": "Sasa",
-    "email": "sasa@example.com"
+    "email": "sasa@example.com",
+    "role": "user"
   }
 }
 ```
@@ -214,7 +202,23 @@ Success response:
   "id": 1,
   "name": "Sasa",
   "email": "sasa@example.com",
+  "role": "user",
   "created_at": "..."
+}
+```
+
+### Get User Role
+
+```http
+GET /users/:id/role
+```
+
+Success response:
+
+```json
+{
+  "id": 1,
+  "role": "user"
 }
 ```
 
